@@ -3,7 +3,7 @@
 **منبع:** پروپوزال المپیاد هجدهمین دانشجویی علوم پزشکی، حیطه کارآفرینی، کلان‌منطقه ۶ — دانشگاه علوم پزشکی اراک، گروه شماره ۸ (۷ صفحه)
 **عنوان طرح:** سپندیار؛ دستیار صوتی هوشمند همراه سالمند و پلتفرم تعاملی و مکالمه‌محور مبتنی بر هوش مصنوعی جهت ارتقای استقلال مراقبتی و پایش فعال بالینی
 **وضعیت کد:** هسته اجرایی `server.py` (پایتون استاندارد + SQLite، پورت ۴۱۷۴) + `index.html` (سالمند) + `caregiver.html` (مراقب) + `android/` (پوسته WebView با پل بومی)
-**آخرین وضعیت تست‌ها:** `test_mvp.py` ۱۲ · `test_full_platform.py` ۴۵ · `test_mvp_stage2.py` ۴۳ · `test_android_control.py` ۲۶ · `test_disambiguation.py` ۳۸ · `test_dialect_accent.py` ۶۶ · `test_live_voice.py` ۸۵ · `test_deployment.py` ۲۲۳ — جمعاً **۵۵۲ بررسی، ۰ شکست**
+**آخرین وضعیت تست‌ها:** `test_mvp.py` ۱۲ · `test_full_platform.py` ۴۵ · `test_mvp_stage2.py` ۴۳ · `test_android_control.py` ۲۶ · `test_disambiguation.py` ۳۸ · `test_dialect_accent.py` ۶۶ · `test_live_voice.py` ۸۵ · `test_deployment.py` ۲۳۸ — جمعاً **۵۶۷ بررسی، ۰ شکست**
 
 ---
 
@@ -537,6 +537,40 @@ body.large-text{font-size:18px}   /* سوییچ این را ست می‌کرد *
 
 **۲۵ بررسی رگرسیون** افزوده شد (۱۹۸ → ۲۲۳) و **غیرپوچ بودنشان اثبات شد**: روی نسخهٔ
 پیش از اصلاح (`5bc79aa`) هیچ‌کدام از هفت الگو وجود نداشت و پس از اصلاح هر هفت هست.
+
+### WebView هیچ سیاست ناوبری‌ای نداشت
+
+`addJavascriptInterface` روی خودِ `WebView` ثبت می‌شود و با هر ناوبری باقی می‌ماند.
+`MainActivity.kt` فقط `shouldInterceptRequest` داشت و **هیچ `shouldOverrideUrlLoading`**
+(شمارش: ۰)، در حالی که **۱۶ متد بومی** در معرض JS بود — از جمله `saveServerUrl` که
+ماندگار است و `runScreenTask`/`requestScreenAction` که کنترل صفحهٔ سالمند را در دست
+می‌گیرند.
+
+اهمیت این را باید دقیق گفت: **امروز آسیب‌پذیری فعالی نیست.** `index.html` صفر ناوبری
+دارد و هر ۵ مسیر XSS بسته شده‌اند. پیکربندی هم واقعاً سخت‌سازی‌شده بود
+(`allowFileAccess=false`، `allowUniversalAccessFromFileURLs=false`،
+`usesCleartextTraffic=false`، `minSdk=26`/`targetSdk=35`، فقط `/assets/` سرو می‌شود،
+`launchApprovedPackage` هم allowlist دارد). این **دفاع در عمق** است: همان حفره‌ای که آن
+۵ XSS می‌توانستند از آن عبور کنند و کل پل بومی را بگیرند.
+
+**دو اصلاح:**
+1. `shouldOverrideUrlLoading` — فقط `https` روی `appassets.androidplatform.net` مجاز
+   است؛ `tel:` به dialer سیستم سپرده می‌شود (کاربر آنجا تأیید می‌کند). این فقط ناوبری
+   **قاب اصلی** را می‌گیرد؛ زیرمنابع مانند `<link>` فونت از `shouldInterceptRequest`
+   می‌گذرند و دست‌نخورده می‌مانند، پس فونت نمی‌شکند.
+2. `saveServerUrl` — فقط `https` با میزبان معتبر. مقدار خام دیگر ذخیره نمی‌شود.
+   `https://localhost` رد می‌شود چون روی اندروید به خودِ گوشی اشاره می‌کند نه ماشین
+   توسعه؛ آدرس IP با پورت پذیرفته می‌شود.
+
+> **محدودیت راستی‌آزمایی — این تغییر کامپایل نشده است.** هیچ ابزار ساخت اندرویدی در
+> این محیط نیست: `gradle`، `kotlinc`، `android/gradlew` و `ANDROID_HOME` هیچ‌کدام
+> موجود نیستند. آنچه راستی‌آزمایی شد: توازن کروشه/پرانتز، وجود همهٔ `import`های لازم،
+> و **رفتار منطق** با بازتاب پایتون (۱۰ حالت: origin مهاجم، `javascript:`، `data:`،
+> `http`، origin خود اپ، IP با پورت، رشتهٔ خالی و مانند آن). این جای کامپایل را
+> نمی‌گیرد — **پیش از انتشار باید بیلد واقعی گرفته شود.**
+
+**۱۵ بررسی رگرسیون** افزوده شد (۲۲۳ → ۲۳۸): پنج تا روی متن `MainActivity.kt` و ده تا
+روی رفتار بازتاب‌شدهٔ منطق.
 
 ## ۱۷) موارد باز و الزامات انطباقی
 
