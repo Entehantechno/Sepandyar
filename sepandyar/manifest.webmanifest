@@ -1,0 +1,12 @@
+{
+  "name": "سپندیار — دستیار سالمند",
+  "short_name": "سپندیار",
+  "description": "دستیار صوتی، دارو، سلامت و مراقبت سالمندان",
+  "lang": "fa-IR",
+  "dir": "rtl",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fbfaf7",
+  "theme_color": "#c9eee1",
+  "icons": []
+}

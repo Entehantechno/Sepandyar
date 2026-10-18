@@ -1,0 +1,12 @@
+{
+  "name": "Sepandyar — Medication Reminder",
+  "nodes": [
+    {"parameters":{"httpMethod":"POST","path":"medication-due","responseMode":"lastNode"},"name":"Medication Due Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[0,0]},
+    {"parameters":{"method":"POST","url":"={{$env.SEPANDYAR_API_URL}}/api/events","sendBody":true,"jsonBody":"={\"type\":\"medication_reminder_sent\",\"payload\":$json}"},"name":"Audit Event","type":"n8n-nodes-base.httpRequest","typeVersion":4,"position":[250,0]},
+    {"parameters":{"method":"POST","url":"={{$env.SEPANDYAR_NOTIFY_URL}}","sendBody":true,"jsonBody":"={\"user_id\":$json.user_id,\"text\":$json.text,\"channels\":[\"voice\",\"push\"]}"},"name":"Notify Senior","type":"n8n-nodes-base.httpRequest","typeVersion":4,"position":[500,0]},
+    {"parameters":{"conditions":{"string":[{"value1":"={{$json.requires_escalation}}","operation":"equals","value2":"true"}]}},"name":"Needs Escalation?","type":"n8n-nodes-base.if","typeVersion":2,"position":[750,0]},
+    {"parameters":{"method":"POST","url":"={{$env.SEPANDYAR_API_URL}}/api/alerts","sendBody":true,"jsonBody":"={\"type\":\"missed_medication\",\"message\":$json.message,\"severity\":\"warning\"}"},"name":"Alert Caregiver","type":"n8n-nodes-base.httpRequest","typeVersion":4,"position":[1000,100]},
+    {"parameters":{"respondWith":"json","responseBody":"={\"ok\":true}"},"name":"Respond","type":"n8n-nodes-base.respondToWebhook","typeVersion":1,"position":[1000,-100]}
+  ],
+  "connections":{"Medication Due Webhook":{"main":[[{"node":"Audit Event","type":"main","index":0}]]},"Audit Event":{"main":[[{"node":"Notify Senior","type":"main","index":0}]]},"Notify Senior":{"main":[[{"node":"Needs Escalation?","type":"main","index":0}]]},"Needs Escalation?":{"main":[[{"node":"Respond","type":"main","index":0},{"node":"Alert Caregiver","type":"main","index":0}]]},"Alert Caregiver":{"main":[[{"node":"Respond","type":"main","index":0}]]}}
+}

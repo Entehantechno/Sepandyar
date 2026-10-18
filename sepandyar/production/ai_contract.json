@@ -1,0 +1,10 @@
+{
+  "stt": {"provider":"whisper","language":"fa","response":{"text":"string","confidence":"number","duration_ms":"number"}},
+  "llm": {"provider":"openrouter","response":{"intent":"string","confidence":"number","spoken_reply":"string","requires_confirmation":"boolean","risk":"low|medium|high|emergency","tool_call":{"name":"string","arguments":"object"}}},
+  "tts": {"language":"fa-IR","response":{"audio_url":"string","duration_ms":"number"}},
+  "policy": {
+    "never_model_only":["medication_change","payment","emergency_call","share_health_data"],
+    "required_for_high_risk":["voice_confirmation","audit_event","consent_scope"],
+    "fallback":"ask_clarifying_question"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "policy": "Review license of code and model weights separately before commercial distribution.",
+  "components": [
+    {"name":"whisper.cpp","repo":"https://github.com/ggml-org/whisper.cpp","license":"MIT","role":"offline STT fallback","status":"selected","note":"Model files and redistribution terms must be reviewed separately."},
+    {"name":"Vosk","repo":"https://github.com/alphacep/vosk-api","license":"Apache-2.0","role":"low-latency offline STT; Persian model candidate","status":"candidate","note":"Validate Persian WER with senior voices before shipping."},
+    {"name":"openWakeWord","repo":"https://github.com/dscripka/openWakeWord","license":"Apache-2.0 code; included pretrained models have separate CC BY-NC-SA terms","role":"on-device wake word","status":"research-only","note":"Do not ship included weights commercially without a compatible license; train/acquire a commercial model."},
+    {"name":"Piper","repo":"https://github.com/rhasspy/piper","license":"MIT code; voice model licenses vary","role":"offline TTS fallback","status":"candidate","note":"Persian voice availability and model license require verification."}
+  ],
+  "implementation_order": ["Vosk/whisper.cpp benchmark on Persian speech", "commercially licensable wake-word model", "offline TTS voice selection", "Android battery and latency profiling"]
+}

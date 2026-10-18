@@ -1,0 +1,63 @@
+{
+  "version": "1.0",
+  "endpoints": {
+    "POST /v1/conversation/turn": {
+      "request": {"conversation_id":"string","text":"string","locale":"fa-IR","context":{"user_id":"string"}},
+      "response": {"intent":"string","confidence":"number","spoken_reply":"string","requires_confirmation":"boolean","tool_call":"object|null","safety":"normal|caution|urgent"}
+    },
+    "POST /v1/medications/{id}/events": {"request":{"event":"taken|snoozed|skipped","at":"ISO-8601"}},
+    "POST /v1/vitals": {"request":{"type":"blood_pressure|glucose|weight","value":"object","source":"manual|ocr|device","measured_at":"ISO-8601"}},
+    "POST /v1/food/analyze": {"request":{"image_id":"string","profile_id":"string"},"response":{"rating":"suitable|caution|avoid|unknown","reason":"string","alternatives":["string"]}},
+    "POST /v1/actions/{id}/confirm": {"request":{"confirmation":"string","channel":"voice|tap"}},
+    "GET /v1/caregiver/status": {"response":{"last_interaction":"ISO-8601","medication_adherence":"number","alerts":[]}},
+    "GET /v1/profiles/{id}": {"response":{"type":"senior|caregiver","name":"string","age":"integer|null","needs":[],"permissions":[]}},
+    "POST /v1/profiles/{id}/caregivers": {"request":{"name":"string","phone":"string","role":"family|professional","permissions":[]},"response":{"status":"invited|active"}},
+    "POST /v1/profiles/{id}/consents": {"request":{"scope":"health|wallet|screen_control|voice_profile","granted":"boolean","confirmed_by_voice":"boolean"}},
+    "GET /v1/vitals/thresholds": {"response":{"items":[{"type":"string","normal_min":"number","normal_max":"number","critical_min":"number","critical_max":"number","updated_by":"string"}]}},
+    "POST /v1/vitals/thresholds": {"request":{"items":"array","updated_by":"string"}},
+    "POST /v1/vitals/evaluate": {"request":{"type":"string","value":"object","source":"manual|voice|ocr|device"},"response":{"status":"normal|out_of_range|critical","notify_senior":"boolean","notify_caregivers":"boolean","request_emergency_call":"boolean"}},
+    "POST /v1/vitals/share": {"request":{"scope":"vitals","expires_days":"integer"},"response":{"url":"string","token":"string","expires_at":"ISO-8601"}},
+    "GET /v1/vitals/share/{token}": {"response":{"profile":"object","vitals":"array","expires_at":"ISO-8601"}},
+    "GET /v1/care-tasks": {"response":{"items":"array"}},
+    "POST /v1/care-tasks": {"request":{"title":"string","kind":"routine|appointment|exercise|refill","assigned_to":"string","due_at":"ISO-8601"}},
+    "POST /v1/care-tasks/{id}/complete": {"response":{"ok":"boolean"}},
+    "GET /v1/checkins": {"response":{"items":"array"}},
+    "GET /v1/contacts": {"response":{"items":"array"}},
+    "POST /v1/contacts": {"request":{"name":"string","phone":"string","relationship":"string"}},
+    "GET /v1/messages": {"response":{"items":"array"}},
+    "POST /v1/messages": {"request":{"contact_id":"string","body":"string","kind":"voice|text|photo"}},
+    "GET /v1/appointments": {"response":{"items":"array"}},
+    "POST /v1/appointments": {"request":{"title":"string","provider":"string","doctor_id":"string|null","location":"string","starts_at":"ISO-8601","reminder_minutes":"integer"}},
+    "GET /v1/doctors": {"response":{"items":"array"}},
+    "POST /v1/doctors": {"request":{"name":"string","specialty":"string","phone":"string","address":"string","clinic":"string","preferred":"boolean"}},
+    "GET /v1/emergency-card": {"response":{"full_name":"string","birth_date":"string","blood_type":"string","allergies":"string","conditions":"string","critical_meds":"string","primary_doctor":"string","emergency_contact":"string"}},
+    "POST /v1/emergency-card": {"request":{"full_name":"string","birth_date":"string","blood_type":"string","allergies":"string","conditions":"string","critical_meds":"string","primary_doctor":"string","emergency_contact":"string"}},
+    "POST /v1/checkins": {"request":{"mood":"string","pain":"string","sleep":"string","note":"string"}},
+    "GET /v1/proactive/due": {"response":{"items":[{"id":"string","kind":"morning_checkin|blood_pressure|evening_checkin","text":"string"}],"checked_at":"ISO-8601"}},
+    "POST /v1/proactive/respond": {"request":{"id":"string","response":"string"}},
+    "GET /v1/reminder-settings": {"response":{"quiet_start":"HH:MM","quiet_end":"HH:MM","max_nudges":"integer","preferred_channel":"voice|push|sms"}},
+    "POST /v1/reminder-settings": {"request":{"quiet_start":"HH:MM","quiet_end":"HH:MM","max_nudges":"integer","preferred_channel":"voice|push|sms"}},
+    "GET /v1/reminders/due": {"response":{"items":"array","checked_at":"ISO-8601","quiet_hours":"boolean"}},
+    "POST /v1/medications/{id}/event": {"request":{"event":"taken|skipped|snoozed"},"response":{"status":"string","log_date":"date"}},
+    "GET /v1/medications/{id}/details": {"response":{"purpose":"string","remaining":"number","refill_threshold":"number","warnings":"string"}},
+    "POST /v1/medications/{id}/details": {"request":{"purpose":"string","remaining":"number","refill_threshold":"number","unit":"string","warnings":"string"}},
+    "POST /v1/medications/{id}/refill": {"request":{"amount":"number"}},
+    "GET /v1/icope": {"response":{"items":"array"}},
+    "GET /v1/icope/summary": {"response":{"domains":"object"}},
+    "POST /v1/icope": {"request":{"domain":"locomotion|vitality|vision|hearing|cognition|psychology","score":"number","notes":"string","assessed_by":"string"},"response":{"status":"good|watch|needs_support"}}
+    "GET /v1/vitals/shares": {"response":{"items":"array"}},
+    "POST /v1/vitals/share/revoke": {"request":{"token":"string"},"response":{"ok":"boolean"}},
+    "GET /v1/admin/ai-config": {"response":{"provider":"string","model":"string","system_prompt":"string","guardrails":"string","tone":"string","temperature":"number"}},
+    "POST /v1/admin/ai-config": {"request":{"provider":"string","base_url":"string","model":"string","stt_provider":"string","tts_provider":"string","voice_id":"string","system_prompt":"string","guardrails":"string","tone":"string","temperature":"number"}},
+    "GET /v1/admin/ai-test": {"response":{"ok":"boolean","message":"string"}},
+    "POST /v1/ai/chat": {"request":{"text":"string","context":"object"},"response":{"ok":"boolean","text":"string","provider":"string"}}
+    "GET /v1/wallet": {"response":{"wallet_id":"string","balance_minor":"integer","currency":"IRR","transactions":[]}},
+    "POST /v1/wallet/topups": {"request":{"amount_minor":"integer","funded_by":"senior|caregiver","idempotency_key":"string"},"response":{"status":"pending|succeeded|failed","balance_minor":"integer"}},
+    "POST /v1/wallet/payment-intents": {"request":{"amount_minor":"integer","merchant":"string","purpose":"string"},"response":{"payment_intent_id":"string","status":"requires_voice_confirmation"}},
+    "POST /v1/wallet/payment-intents/{id}/confirm": {"request":{"voice_confirmation":"string"},"response":{"status":"succeeded|failed|cancelled","receipt_id":"string"}}
+  },
+  "safety": {
+    "always_confirm": ["payment", "final_order", "medication_change", "share_health_data", "emergency_call"],
+    "never_allow_model_direct_access": ["passwords", "otp", "card_number", "raw_audio_storage"]
+  }
+}
