@@ -35,7 +35,13 @@ def db():
  CREATE TABLE IF NOT EXISTS safe_zones(id TEXT PRIMARY KEY,name TEXT,lat REAL,lon REAL,radius_m REAL,enabled INTEGER DEFAULT 1,created_at TEXT);
  CREATE TABLE IF NOT EXISTS ai_config(id INTEGER PRIMARY KEY CHECK(id=1),provider TEXT,base_url TEXT,model TEXT,stt_provider TEXT,tts_provider TEXT,system_prompt TEXT,guardrails TEXT,voice_id TEXT,tone TEXT,temperature REAL,updated_at TEXT);
  CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,type TEXT,payload TEXT,created_at TEXT);
- CREATE TABLE IF NOT EXISTS vital_thresholds(type TEXT PRIMARY KEY,normal_min TEXT,normal_max TEXT,critical_min TEXT,critical_max TEXT,updated_by TEXT,updated_at TEXT);''')
+ CREATE TABLE IF NOT EXISTS vital_thresholds(type TEXT PRIMARY KEY,normal_min TEXT,normal_max TEXT,critical_min TEXT,critical_max TEXT,updated_by TEXT,updated_at TEXT);
+ CREATE TABLE IF NOT EXISTS education_content(id TEXT PRIMARY KEY,topic TEXT,category TEXT,body TEXT,status TEXT DEFAULT 'pending',approved_by TEXT,approved_at TEXT,updated_at TEXT);
+ CREATE TABLE IF NOT EXISTS symptom_catalog(name TEXT PRIMARY KEY,escalate INTEGER DEFAULT 0,sort_order INTEGER DEFAULT 0);
+ CREATE TABLE IF NOT EXISTS symptom_reports(id TEXT PRIMARY KEY,symptom TEXT,severity TEXT,note TEXT,source TEXT DEFAULT 'self_report',escalated INTEGER DEFAULT 0,created_at TEXT);
+ CREATE TABLE IF NOT EXISTS caregiver_actions(id TEXT PRIMARY KEY,kind TEXT,payload TEXT,status TEXT DEFAULT 'pending',requested_by TEXT,requested_at TEXT,delivered_at TEXT,delivered_by TEXT);
+ CREATE TABLE IF NOT EXISTS caregiver_sessions(token TEXT PRIMARY KEY,phone TEXT,created_at TEXT,expires_at TEXT);
+ CREATE TABLE IF NOT EXISTS safety_rules(id TEXT PRIMARY KEY,level TEXT,pattern TEXT,action TEXT,reply TEXT,updated_at TEXT);''')
  defaults=[('systolic','90','140','80','180'),('diastolic','60','90','50','120'),('glucose','70','180','54','300'),('weight','0','1000','0','1000')]
  for t,nmin,nmax,cmin,cmax in defaults: c.execute('INSERT OR IGNORE INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?)',(t,nmin,nmax,cmin,cmax,'system',now()))
  cols=[x[1] for x in c.execute('PRAGMA table_info(transactions)').fetchall()]
@@ -45,6 +51,23 @@ def db():
  c.execute('INSERT OR IGNORE INTO wallet(id,balance,currency) VALUES(1,1250000,"IRR")')
  c.execute('INSERT OR IGNORE INTO ai_config(id,provider,base_url,model,stt_provider,tts_provider,system_prompt,guardrails,voice_id,tone,temperature,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?,?,?)',('openrouter','https://openrouter.ai/api/v1','openai/gpt-4o-mini','whisper','native-tts','تو یک دستیار فارسی محترم، کوتاه‌گو و شفاف برای سالمندان هستی.','هرگز تشخیص قطعی، تغییر دوز دارو، پرداخت یا تماس اضطراری را بدون تأیید انجام نده. در ابهام سؤال روشن‌کننده بپرس.','friendly_fa','گرم، آرام، کوتاه و غیرکودکانه',0.2,now()))
  c.execute('INSERT OR IGNORE INTO reminder_settings(id,quiet_start,quiet_end,max_nudges,preferred_channel,updated_at) VALUES(1,?,?,?,?,?)',('22:00','07:00',2,'voice',now()))
+ edu=[('medication_adherence','دارو','پایبندی دارویی','داروها را سر همان ساعت و با همان مقدار که پزشک نوشته مصرف کنید. اگر یک نوبت را فراموش کردید، مقدار را دو برابر نکنید؛ فقط به من بگویید تا ثبت کنم و به مراقب شما اطلاع دهم.','نمونه اولیه — نیازمند تأیید پزشک'),
+      ('blood_pressure','فشار خون','اندازه‌گیری در خانه','فشار خون را در حالت نشسته و پس از پنج دقیقه استراحت اندازه بگیرید و بازو هم‌سطح قلب باشد. مقدار را با صدا به من بگویید تا در پرونده ثبت شود.','نمونه اولیه — نیازمند تأیید پزشک'),
+      ('salt_diet','تغذیه','نمک کمتر','مصرف نمکدان را سر سفره کنار بگذارید و به‌جای آن از سبزی معطر، لیمو و ادویه استفاده کنید. غذاهای کنسروی و شور را کمتر کنید.','نمونه اولیه — نیازمند تأیید پزشک'),
+      ('walking','فعالیت بدنی','حرکت روزانه','روزی چند بار کوتاه راه رفتن در خانه یا حیاط، به‌همراه کسی یا با تکیه‌گاه مطمئن، بهتر از یک پیاده‌روی طولانی و خسته‌کننده است.','نمونه اولیه — نیازمند تأیید پزشک'),
+      ('hydration','آب','نوشیدن آب','در طول روز جرعه‌جرعه آب بنوشید، حتی وقتی تشنه نیستید. اگر پزشک برای شما محدودیت مایعات تعیین کرده، همان مقدار را رعایت کنید.','نمونه اولیه — نیازمند تأیید پزشک'),
+      ('fall_prevention','ایمنی','پیشگیری از زمین خوردن','مسیر رفت‌وآمد خانه را خلوت نگه دارید، فرش‌های لیز را جمع کنید و شب‌ها چراغ راهرو را روشن بگذارید. کفش پاشنه‌دار یا دمپایی لق نپوشید.','نمونه اولیه — نیازمند تأیید پزشک'),
+      ('sleep','خواب','خواب بهتر','ساعت خواب و بیداری را ثابت نگه دارید و چرت روز را کوتاه کنید. اگر شب‌ها بی‌خواب هستید، آن را در گزارش روزانه به من بگویید.','نمونه اولیه — نیازمند تأیید پزشک'),
+      ('loneliness','ارتباط','تنهایی کمتر','هر روز یک تماس کوتاه با خانواده یا یک دوست داشته باشید. اگر دوست دارید، من می‌توانم درخواست تماس را برای مراقب شما بفرستم.','نمونه اولیه — نیازمند تأیید پزشک')]
+ for tid,topic,cat,txt,appr in edu: c.execute('INSERT OR IGNORE INTO education_content(id,topic,category,body,status,approved_by,approved_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',(tid,topic,cat,txt,'approved',appr,now(),now()))
+ symp=[('تنگی نفس',1,1),('درد قفسه سینه',1,2),('تپش قلب',1,3),('سرگیجه',0,4),('سردرد',0,5),('تهوع',0,6),('استفراغ',0,7),('درد شکم',0,8),('تورم پاها',0,9),('بی‌حالی',0,10),('تب',0,11),('بی‌خوابی',0,12),('اضطراب',0,13),('درد مفاصل',0,14)]
+ for nm,esc,so in symp: c.execute('INSERT OR IGNORE INTO symptom_catalog(name,escalate,sort_order) VALUES(?,?,?)',(nm,esc,so))
+ crit_reply='این وضعیت را نمی‌توانم از راه دور تشخیص دهم و اجازه اظهار نظر بالینی ندارم. لطفاً همین حالا با مراقب خود یا اورژانس ۱۱۵ تماس بگیرید. اگر اجازه بدهید، درخواست تماس را برای مراقب اصلی شما می‌فرستم.'
+ refer_reply='این پرسش نیازمند نظر پزشک یا داروساز است؛ من اجازه تشخیص یا تغییر دارو ندارم. می‌توانم همین پرسش را برای مراقب شما بفرستم تا با پزشک مطرح شود.'
+ rules=[('critical','emergency',crit_reply,['درد قفسه سینه','درد سینه','سنگینی سینه','تنگی نفس','نفس نمی‌کشم','نمی‌توانم نفس بکشم','از حال رفتم','غش کردم','بیهوش شدم','تشنج','سکته','بی‌حسی صورت','کج شدن صورت','خونریزی شدید','زمین خوردم','خودکشی','می‌خواهم بمیرم']),
+        ('ambiguous','refer_professional',refer_reply,['دوز دارو','مقدار دارو','دارو را قطع','قرص را قطع','چه بیماری دارم','چه‌ام هست','تداخل دارویی','جایگزین دارو','نسخه بنویس','تجویز کن'])]
+ for lvl,act,reply,pats in rules:
+  for pat in pats: c.execute('INSERT OR IGNORE INTO safety_rules(id,level,pattern,action,reply,updated_at) VALUES(?,?,?,?,?,?)',(lvl+'::'+pat,lvl,pat,act,reply,now()))
  c.commit(); return c
 def body(h):
  try: n=int(h.headers.get('Content-Length','0')); return json.loads(h.rfile.read(n) or '{}')
@@ -101,9 +124,29 @@ def report_html(data):
  p=data.get('profile') or {}; items=data.get('vitals') or []
  tr=''.join(f"<tr><td>{x.get('type','')}</td><td>{x.get('value','')}</td><td>{x.get('source','')}</td><td>{x.get('measured_at','')}</td></tr>" for x in items)
  return f'''<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><title>گزارش سلامت — سپندیار</title><style>body{{font-family:Tahoma,Arial;max-width:900px;margin:30px auto;padding:0 18px;color:#18312f}}h1{{color:#347d6d}}table{{width:100%;border-collapse:collapse}}td,th{{padding:12px;border-bottom:1px solid #dfe9e4;text-align:right}}.note{{background:#eef8f3;padding:14px;border-radius:12px}}</style><h1>گزارش علائم حیاتی</h1><div class="note">این لینک تا {data['expires_at']} معتبر است. اطلاعات با اجازه سالمند به اشتراک گذاشته شده است.</div><h2>{p.get('name','سالمند')}</h2><p>سن: {p.get('age','ثبت نشده')} — شرایط ثبت‌شده: {p.get('needs','ثبت نشده')}</p><table><tr><th>نوع</th><th>مقدار</th><th>منبع</th><th>زمان</th></tr>{tr}</table><p style="color:#71807c">این گزارش جایگزین تشخیص پزشک نیست.</p></html>'''
+def normalize_fa(t): return str(t or '').replace('ي','ی').replace('ك','ک')
+def assess_risk(c,text):
+ t=normalize_fa(text).lower()
+ for r in c.execute("SELECT * FROM safety_rules ORDER BY CASE level WHEN 'critical' THEN 0 ELSE 1 END, pattern").fetchall():
+  if r['pattern'].lower() in t: return {'level':r['level'],'matched':r['pattern'],'action':r['action'],'reply':r['reply']}
+ return {'level':'normal','matched':None,'action':None,'reply':None}
+def enqueue_caregiver_action(c,kind,payload,requested_by='senior'):
+ aid=str(uuid.uuid4()); c.execute('INSERT INTO caregiver_actions VALUES(?,?,?,?,?,?,NULL,NULL)',(aid,kind,json.dumps(payload,ensure_ascii=False),'pending',requested_by,now())); return aid
+def open_alert(c,atype,message,severity='normal'):
+ aid=str(uuid.uuid4()); c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(aid,atype,message,severity,'open',now())); return aid
+def consent_granted(c,scope='health'):
+ r=c.execute('SELECT granted FROM consents WHERE scope=?',(scope,)).fetchone(); return bool(r and r['granted'])
+def caregiver_session(c,headers):
+ tok=(headers.get('X-Caregiver-Token') or '').strip()
+ if not tok: return None
+ r=c.execute('SELECT * FROM caregiver_sessions WHERE token=?',(tok,)).fetchone()
+ if not r or (r['expires_at'] and r['expires_at']<now()): return None
+ return dict(r)
+def primary_caregiver(c):
+ r=c.execute('SELECT * FROM caregivers ORDER BY created_at LIMIT 1').fetchone(); return dict(r) if r else None
 class Handler(SimpleHTTPRequestHandler):
  def __init__(self,*a,**kw): super().__init__(*a,directory=ROOT,**kw)
- def do_OPTIONS(self): self.send_response(204); self.send_header('Access-Control-Allow-Origin','*'); self.send_header('Access-Control-Allow-Headers','Content-Type,Idempotency-Key'); self.send_header('Access-Control-Allow-Methods','GET,POST,PUT,OPTIONS'); self.end_headers()
+ def do_OPTIONS(self): self.send_response(204); self.send_header('Access-Control-Allow-Origin','*'); self.send_header('Access-Control-Allow-Headers','Content-Type,Idempotency-Key,X-Caregiver-Token'); self.send_header('Access-Control-Allow-Methods','GET,POST,PUT,OPTIONS'); self.end_headers()
  def do_GET(self):
   p=urlparse(self.path).path; c=db()
   if p.startswith('/share/'):
@@ -183,6 +226,25 @@ class Handler(SimpleHTTPRequestHandler):
     r=ureq.Request('https://api.openai.com/v1/realtime/client_secrets',data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','OpenAI-Safety-Identifier':hashlib.sha256(b'sepandyar-local-user').hexdigest()},method='POST')
     with ureq.urlopen(r,timeout=15) as resp: return send(self,200,json.loads(resp.read()))
    except Exception as e: return send(self,502,{'error':'realtime_provider_error','message':'اتصال realtime برقرار نشد.'})
+  if p=='/api/education/topics': return send(self,200,{'items':rows(c,"SELECT id,topic,category,approved_by FROM education_content WHERE status='approved' ORDER BY category,topic")})
+  if p=='/api/education/next':
+   it=rows(c,"SELECT id,topic,category,body,approved_by FROM education_content WHERE status='approved' ORDER BY RANDOM() LIMIT 1"); return send(self,200,{'item':it[0] if it else None})
+  if p=='/api/education': return send(self,200,{'items':rows(c,'SELECT * FROM education_content ORDER BY category,topic')})
+  if p.startswith('/api/education/'):
+   r=c.execute("SELECT * FROM education_content WHERE id=? AND status='approved'",(p.split('/')[3],)).fetchone(); return send(self,200,dict(r)) if r else send(self,404,{'error':'content_not_found_or_not_approved'})
+  if p=='/api/symptoms/catalog': return send(self,200,{'items':rows(c,'SELECT name,escalate FROM symptom_catalog ORDER BY sort_order')})
+  if p=='/api/symptoms': return send(self,200,{'items':rows(c,'SELECT * FROM symptom_reports ORDER BY created_at DESC LIMIT 50')})
+  if p=='/api/safety/rules': return send(self,200,{'items':rows(c,'SELECT level,pattern,action,reply FROM safety_rules ORDER BY level,pattern')})
+  if p=='/api/caregiver/actions': return send(self,200,{'items':rows(c,'SELECT * FROM caregiver_actions ORDER BY requested_at DESC LIMIT 50')})
+  if p=='/api/caregiver/panel':
+   s=caregiver_session(c,self.headers)
+   if not s: return send(self,403,{'error':'caregiver_session_required','message':'برای دیدن این صفحه، ابتدا با شماره همراه مراقب وارد شوید.'})
+   if not consent_granted(c,'health'): return send(self,403,{'error':'senior_consent_not_granted','message':'سالمند هنوز رضایت خود را برای اشتراک‌گذاری اطلاعات سلامت ثبت نکرده است.'})
+   prof=c.execute('SELECT name,age,needs FROM profile WHERE id=1').fetchone(); today=datetime.datetime.now().date().isoformat()
+   meds=rows(c,"SELECT m.id,m.name,m.time,COALESCE(l.event,'pending') AS status FROM medications m LEFT JOIN medication_logs l ON l.medication_id=m.id AND l.log_date=? ORDER BY m.time",(today,))
+   alerts=rows(c,"SELECT id,type,message,severity,status,created_at FROM alerts WHERE status='open' ORDER BY created_at DESC LIMIT 20")
+   vit=c.execute('SELECT type,value,measured_at FROM vitals ORDER BY measured_at DESC LIMIT 1').fetchone()
+   return send(self,200,{'profile':dict(prof) if prof else {},'medications':meds,'open_alerts':alerts,'last_vital':dict(vit) if vit else None,'tasks':rows(c,"SELECT * FROM care_tasks WHERE status!='done' ORDER BY due_at"),'symptoms':rows(c,'SELECT * FROM symptom_reports ORDER BY created_at DESC LIMIT 10'),'pending_actions':[a for a in rows(c,'SELECT * FROM caregiver_actions ORDER BY requested_at DESC LIMIT 50') if a['status']=='pending'],'checked_at':now()})
   if p=='/api/alerts': return send(self,200,{'items':rows(c,'SELECT * FROM alerts ORDER BY created_at DESC LIMIT 50')})
   if p=='/api/events': return send(self,200,{'items':rows(c,'SELECT * FROM events ORDER BY created_at DESC LIMIT 100')})
   return super().do_GET()
@@ -218,7 +280,9 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/contacts':
    cid=str(uuid.uuid4()); c.execute('INSERT INTO contacts VALUES(?,?,?,?,?)',(cid,d.get('name',''),d.get('phone',''),d.get('relationship','family'),now())); c.commit(); return send(self,201,{'id':cid,'ok':True})
   if p=='/api/messages':
-   mid=str(uuid.uuid4()); c.execute('INSERT INTO messages VALUES(?,?,?,?,?,?)',(mid,d.get('contact_id',''),d.get('body',''),d.get('kind','voice'),now(),'queued')); c.commit(); return send(self,201,{'id':mid,'ok':True,'status':'queued'})
+   mid=str(uuid.uuid4()); c.execute('INSERT INTO messages VALUES(?,?,?,?,?,?)',(mid,d.get('contact_id',''),d.get('body',''),d.get('kind','voice'),now(),'queued'))
+   aid=enqueue_caregiver_action(c,'message',{'message_id':mid,'contact_id':d.get('contact_id',''),'body':d.get('body',''),'kind':d.get('kind','voice')})
+   c.commit(); return send(self,201,{'id':mid,'ok':True,'status':'queued','action_id':aid})
   if p=='/api/appointments':
    aid=str(uuid.uuid4()); provider=d.get('provider',''); doctor_id=d.get('doctor_id');
    if doctor_id:
@@ -285,9 +349,75 @@ class Handler(SimpleHTTPRequestHandler):
    tid=str(uuid.uuid4()); c.execute('UPDATE wallet SET balance=balance-? WHERE id=1',(amount,)); c.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',(tid,'payment',-amount,d.get('description','پرداخت'),now(),key)); c.commit(); return send(self,200,{'status':'succeeded','transaction_id':tid,'balance':w-amount})
   if p=='/api/events':
    eid=str(uuid.uuid4()); c.execute('INSERT INTO events VALUES(?,?,?,?)',(eid,d.get('type','unknown'),json.dumps(d.get('payload',{}),ensure_ascii=False),now())); c.commit(); return send(self,201,{'ok':True,'id':eid})
+  if p=='/api/education':
+   eid=str(uuid.uuid4()); topic=str(d.get('topic','')).strip(); bodytext=str(d.get('body','')).strip()
+   if not topic or not bodytext: return send(self,400,{'error':'topic_and_body_required'})
+   c.execute('INSERT INTO education_content VALUES(?,?,?,?,?,?,?,?)',(eid,topic,str(d.get('category','عمومی')),bodytext,'pending','',None,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'education_submitted',json.dumps({'id':eid,'topic':topic},ensure_ascii=False),now())); c.commit(); return send(self,201,{'id':eid,'status':'pending'})
+  if p.startswith('/api/education/') and p.endswith('/approve'):
+   eid=p.split('/')[3]; approved_by=str(d.get('approved_by','')).strip()
+   if not approved_by: return send(self,400,{'error':'approved_by_required'})
+   if not c.execute('SELECT id FROM education_content WHERE id=?',(eid,)).fetchone(): return send(self,404,{'error':'content_not_found'})
+   c.execute("UPDATE education_content SET status='approved',approved_by=?,approved_at=?,updated_at=? WHERE id=?",(approved_by,now(),now(),eid)); c.commit(); return send(self,200,{'id':eid,'status':'approved'})
+  if p=='/api/symptoms':
+   sym=str(d.get('symptom','')).strip(); sev=str(d.get('severity','متوسط')).strip()
+   if not sym: return send(self,400,{'error':'symptom_required'})
+   cat=c.execute('SELECT * FROM symptom_catalog WHERE name=?',(sym,)).fetchone()
+   escalate=1 if (cat and cat['escalate']) or sev=='شدید' else 0
+   sid=str(uuid.uuid4()); c.execute('INSERT INTO symptom_reports VALUES(?,?,?,?,?,?,?)',(sid,sym,sev,str(d.get('note','')),str(d.get('source','self_report')),escalate,now()))
+   resp={'id':sid,'ok':True,'escalated':bool(escalate)}
+   if escalate:
+    aid=open_alert(c,'symptom_escalation','گزارش خوداظهاری نیازمند بررسی: '+sym+' ('+sev+')','high'); act=enqueue_caregiver_action(c,'symptom_alert',{'symptom':sym,'severity':sev,'note':str(d.get('note','')),'report_id':sid})
+    resp.update({'alert_id':aid,'action_id':act,'reply':'این علامت را ثبت کردم و فوراً به مراقب شما اطلاع دادم. لطفاً منتظر تماس او باشید.'})
+   else: resp['reply']='علامت «'+sym+'» را ثبت کردم و در گزارش مراقب شما قرار دادم.'
+   c.commit(); return send(self,201,resp)
+  if p=='/api/caregiver/session':
+   phone=str(d.get('phone','')).strip()
+   if not phone: return send(self,400,{'error':'phone_required'})
+   cg=c.execute('SELECT * FROM caregivers WHERE phone=?',(phone,)).fetchone()
+   if not cg: return send(self,403,{'error':'caregiver_not_invited','message':'این شماره در فهرست مراقبان ثبت نشده است.'})
+   if not consent_granted(c,'health'): return send(self,403,{'error':'senior_consent_not_granted','message':'سالمند هنوز رضایت خود را برای اشتراک‌گذاری اطلاعات سلامت ثبت نکرده است.'})
+   tok=uuid.uuid4().hex; exp=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=7)).isoformat()
+   c.execute('INSERT INTO caregiver_sessions VALUES(?,?,?,?)',(tok,phone,now(),exp)); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_session_opened',json.dumps({'phone':phone},ensure_ascii=False),now())); c.commit()
+   return send(self,201,{'token':tok,'expires_at':exp,'caregiver':{'name':cg['name'],'role':cg['role']}})
+  if p=='/api/caregiver/session/revoke':
+   s=caregiver_session(c,self.headers)
+   if not s: return send(self,403,{'error':'caregiver_session_required'})
+   c.execute('DELETE FROM caregiver_sessions WHERE token=?',(s['token'],)); c.commit(); return send(self,200,{'ok':True})
+  if p=='/api/caregiver/call-request':
+   cg=primary_caregiver(c)
+   if not cg: return send(self,409,{'error':'no_caregiver','message':'هنوز مراقبی ثبت نشده است.'})
+   aid=enqueue_caregiver_action(c,'call_request',{'phone':cg['phone'],'caregiver':cg['name'],'reason':str(d.get('reason','درخواست تماس سالمند'))}); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'call_requested',json.dumps({'caregiver':cg['name']},ensure_ascii=False),now())); c.commit()
+   return send(self,201,{'id':aid,'ok':True,'status':'pending','caregiver':cg['name'],'phone':cg['phone'],'reply':'درخواست تماس را برای '+cg['name']+' فرستادم.'})
+  if p.startswith('/api/caregiver/actions/') and p.endswith('/deliver'):
+   aid=p.split('/')[4]; row=c.execute('SELECT * FROM caregiver_actions WHERE id=?',(aid,)).fetchone()
+   if not row: return send(self,404,{'error':'action_not_found'})
+   c.execute("UPDATE caregiver_actions SET status='delivered',delivered_at=?,delivered_by=? WHERE id=?",(now(),str(d.get('delivered_by','caregiver')),aid))
+   if row['kind']=='message':
+    try: mid=json.loads(row['payload'] or '{}').get('message_id')
+    except Exception: mid=None
+    if mid: c.execute("UPDATE messages SET status='delivered' WHERE id=? AND status='queued'",(mid,))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_action_delivered',json.dumps({'id':aid,'kind':row['kind']},ensure_ascii=False),now())); c.commit(); return send(self,200,{'id':aid,'status':'delivered'})
   if p=='/api/ai/chat':
-   answer=call_llm(c,str(d.get('text','')),d.get('context')); return send(self,200,{'ok':True,'text':answer,'provider':'configured'}) if answer else send(self,503,{'ok':False,'error':'ai_not_configured_or_unavailable'})
+   text=str(d.get('text','')); risk=assess_risk(c,text)
+   if risk['level']!='normal':
+    extra={}
+    if risk['action']=='emergency':
+     cg=primary_caregiver(c) or {}
+     extra={'alert_id':open_alert(c,'clinical_risk','گفت‌وگوی نیازمند بررسی فوری: '+str(risk['matched']),'critical'),'action_id':enqueue_caregiver_action(c,'call_request',{'phone':cg.get('phone',''),'caregiver':cg.get('name',''),'reason':'گزارش پرخطر در گفت‌وگو: '+str(risk['matched'])}),'matched':risk['matched']}
+    else: extra={'action_id':enqueue_caregiver_action(c,'professional_referral',{'text':text[:300],'matched':risk['matched']}),'matched':risk['matched']}
+    c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'safety_intercept',json.dumps({'level':risk['level'],'matched':risk['matched']},ensure_ascii=False),now())); c.commit()
+    out={'ok':True,'text':risk['reply'],'provider':'safety_guardrail','safety':'urgent' if risk['level']=='critical' else 'caution','clinical_answer_blocked':True,'requires_escalation':risk['action']=='emergency'}; out.update(extra); return send(self,200,out)
+   answer=call_llm(c,text,d.get('context')); return send(self,200,{'ok':True,'text':answer,'provider':'configured'}) if answer else send(self,503,{'ok':False,'error':'ai_not_configured_or_unavailable'})
   if p=='/api/conversation':
+   risk=assess_risk(c,d.get('text',''))
+   if risk['level']!='normal':
+    extra={}
+    if risk['action']=='emergency':
+     cg=primary_caregiver(c) or {}
+     extra={'alert_id':open_alert(c,'clinical_risk','گفت‌وگوی نیازمند بررسی فوری: '+str(risk['matched']),'critical'),'action_id':enqueue_caregiver_action(c,'call_request',{'phone':cg.get('phone',''),'caregiver':cg.get('name',''),'reason':'گزارش پرخطر در گفت‌وگو: '+str(risk['matched'])})}
+    else: extra={'action_id':enqueue_caregiver_action(c,'professional_referral',{'text':str(d.get('text',''))[:300],'matched':risk['matched']})}
+    c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'safety_intercept',json.dumps({'level':risk['level'],'matched':risk['matched']},ensure_ascii=False),now())); c.commit()
+    out={'intent':'safety.emergency' if risk['action']=='emergency' else 'safety.referral','spoken_reply':risk['reply'],'requires_confirmation':True,'safety':'urgent' if risk['level']=='critical' else 'caution','clinical_answer_blocked':True}; out.update(extra); return send(self,200,out)
    text=str(d.get('text','')).replace('ي','ی').replace('ك','ک'); intent='conversation.general'; reply='درخواست شما را شنیدم و آماده کمک هستم.'
    if 'کیف پول' in text or 'موجودی' in text: intent='wallet.balance'; reply='موجودی کیف پول شما آماده بررسی است.'
    elif 'دارو' in text: intent='medication.list_today'; reply='داروهای امروز شما را آماده کردم.'
