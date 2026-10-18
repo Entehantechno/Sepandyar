@@ -352,6 +352,80 @@ check('محافظ ادمین در مسیر GET هست',"p.startswith('/api/admin
 check('نتیجهٔ send() در متغیر ذخیره نمی‌شود','=send(self' not in srvsrc.replace(' ',''))
 
 print()
+print('--- 10) ورودی نامعتبر، تزریق SQL و انحراف قرارداد ---')
+# باگ‌های این مرحله:
+#  الف) /api/appointments وقتی doctor_id نداشت با NameError می‌ترکید (location بیرون از if
+#       مقدار نمی‌گرفت) — و شکل درخواستِ خودِ کلاینت دقیقاً همان بود، پس ثبت صوتی نوبت
+#       پزشک کاملاً از کار افتاده بود
+#  ب) /api/location و /api/safe-zones با فیلد غایب، float(None) -> 500
+#  ج) api-contract.json اصلاً JSON معتبر نبود (دو کامای جاافتاده)
+
+# --- الف) ثبت نوبت بدون doctor_id ---
+st,d=req(BASE,'/api/appointments','POST',{'title':'نوبت پزشک','provider':'دکتر رضایی',
+    'location':'کلینیک','starts_at':'2026-11-01T10:00:00Z','reminder_minutes':60})
+check('ثبت نوبت بدون doctor_id -> 201 (رگرسیون NameError)',st==201,st)
+check('نوبت provider درست را نگه داشته',d.get('provider')=='دکتر رضایی',d)
+st,d=req(BASE,'/api/appointments')
+check('فهرست نوبت‌ها خوانده می‌شود',st==200 and any(x.get('provider')=='دکتر رضایی' for x in d.get('items',[])),st)
+st,d=req(BASE,'/api/appointments','POST',{})
+check('نوبت با بدنهٔ خالی هم 500 نمی‌دهد',st in (201,400),st)
+
+# --- ب) اعتبارسنجی مختصات ---
+for label,payload,want in [('بدون مختصات',{},400),('مختصات غیرعددی',{'lat':'abc','lon':51.4},400),
+                           ('معتبر',{'lat':35.7,'lon':51.4,'accuracy':10},201)]:
+    st,d=req(BASE,'/api/location','POST',payload)
+    check('/api/location %s -> %d (نه 500)'%(label,want),st==want,st)
+    if want==400: check('/api/location %s کد خطا دارد'%label,d.get('error')=='coordinates_required',d)
+st,d=req(BASE,'/api/safe-zones','POST',{'name':'خانه','lat':35.7,'lon':51.4,'radius_m':200})
+check('/api/safe-zones معتبر -> 201',st==201,st)
+for label,payload,want,err in [('بدون مختصات',{'name':'خانه'},400,'coordinates_required'),
+                               ('شعاع صفر',{'name':'خانه','lat':35.7,'lon':51.4,'radius_m':0},400,'invalid_radius'),
+                               ('شعاع منفی',{'name':'خانه','lat':35.7,'lon':51.4,'radius_m':-5},400,'invalid_radius')]:
+    st,d=req(BASE,'/api/safe-zones','POST',payload)
+    check('/api/safe-zones %s -> 400 (نه 500)'%label,st==want,st)
+    check('/api/safe-zones %s کد %s دارد'%(label,err),d.get('error')==err,d)
+# تشخیص خروج از محدوده باید سالم بماند
+st,d=req(BASE,'/api/location','POST',{'lat':36.9,'lon':52.9,'source':'test'})
+check('موقعیت بیرون از محدوده شناسایی می‌شود',st==201 and len(d.get('outside_zones',[]))>=1,(st,d))
+
+# --- پ) تزریق SQL نباید چیزی را بشکند ---
+inj=["' OR '1'='1","'; DROP TABLE caregivers;--","1; DELETE FROM wallet","' UNION SELECT token,phone FROM caregiver_sessions--"]
+broken=[]
+for path in ['/api/caregivers','/api/medications','/api/symptoms','/api/contacts','/api/appointments','/api/conversation']:
+    for pay in inj:
+        st,d=req(BASE,path,'POST',{'name':pay,'text':pay,'symptom':pay,'title':pay,'phone':pay})
+        if st is None or st>=500: broken.append((path,pay[:18],st))
+check('هیچ payload تزریقی 500 نمی‌دهد',not broken,broken[:4])
+alive=[]
+for ep,want in [('/api/caregivers',200),('/api/wallet',200),('/api/medications',200),
+                ('/api/dialects',200),('/api/safety/rules',403)]:  # قواعد پشت احراز هویت است
+    st,_=req(BASE,ep); alive.append((ep,st,want))
+check('همهٔ جدول‌ها پس از حملهٔ تزریق سالم‌اند',all(s==w for _,s,w in alive),alive)
+
+# --- ت) api-contract.json باید JSON معتبر باشد ---
+try:
+    _cj=json.load(open(os.path.join(ROOT,'api-contract.json'),encoding='utf-8'))
+    check('api-contract.json یک JSON معتبر است',True)
+    check('api-contract.json وضعیت پیش‌نویس بودن را اعلام می‌کند',bool(_cj.get('_status')),'')
+    check('انحراف اندازه‌گیری‌شده در قرارداد ثبت شده',bool(_cj.get('_measured_drift')),'')
+except Exception as e:
+    check('api-contract.json یک JSON معتبر است',False,type(e).__name__)
+
+# --- ث) جاروی خودکار: هیچ اندپوینت POST نباید با بدنهٔ خالی 500 بدهد ---
+import re as _re
+_postsrc=srvsrc[srvsrc.find(' def _post(self):'):]
+_eps=sorted(set(_re.findall(r"if p=='(/api/[a-z0-9/_-]*)':",_postsrc)))
+_sweep=[]
+for _e in _eps:
+    try:
+        _st,_d=req(BASE,_e,'POST',{})
+        # 503 با ai_not_configured پاسخ درست «کلید API نیست» است، نه خطای سرور
+        if _st is None or (_st>=500 and not (_st==503 and _d.get('error')=='ai_not_configured_or_unavailable')):
+            _sweep.append((_e,_st,_d.get('error')))
+    except Exception as _ex: _sweep.append((_e,type(_ex).__name__))
+check('جاروی %d اندپوینت POST: هیچ‌کدام 500 نمی‌دهد'%len(_eps),not _sweep,_sweep[:6])
+
+print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
 if failures:
     print('شکست‌ها:'); [print(' -',f) for f in failures]

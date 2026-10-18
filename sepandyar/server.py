@@ -64,6 +64,9 @@ def db(h=None):
  # به همان حوزهٔ داخلی وصل می‌شد و همهٔ ردیف‌ها جز نخستین را پاک می‌کرد.
  if c.execute('SELECT 1 FROM caregivers GROUP BY phone HAVING COUNT(*)>1 LIMIT 1').fetchone():
   c.execute('DELETE FROM caregivers WHERE rowid NOT IN (SELECT MIN(rowid) FROM caregivers GROUP BY phone)'); c.commit()
+ # ردیف‌های بی‌شماره پیش از افزودن این اعتبارسنجی ساخته شده بودند؛ چنین مراقبی
+ # هرگز نمی‌تواند وارد شود (شماره برای ورود الزامی است) پس دادهٔ مرده است
+ c.execute("DELETE FROM caregivers WHERE phone IS NULL OR TRIM(phone)=''")
  c.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_caregivers_phone ON caregivers(phone)')
  cols=[x[1] for x in c.execute('PRAGMA table_info(transactions)').fetchall()]
  if 'idempotency_key' not in cols:
@@ -223,6 +226,11 @@ OBJ_SUFFIXES=('مو','رو','شو','و')
 def as_int(v,default=0):
  # ورودی نامعتبر باید ۴۰۰ بدهد نه ۵۰۰؛ None و رشتهٔ غیرعددی هم شامل می‌شود
  try: return int(float(v))
+ except Exception: return None
+
+def as_float(v):
+ # فیلد غایب یا غیرعددی باید 400 بدهد؛ float(None) پیش‌تر 500 می‌داد
+ try: return float(v)
  except Exception: return None
 
 def idem_key(h,d):
@@ -661,7 +669,9 @@ class Handler(SimpleHTTPRequestHandler):
    aid=enqueue_caregiver_action(c,'message',{'message_id':mid,'contact_id':d.get('contact_id',''),'body':d.get('body',''),'kind':d.get('kind','voice')})
    c.commit(); return send(self,201,{'id':mid,'ok':True,'status':'queued','action_id':aid})
   if p=='/api/appointments':
-   aid=str(uuid.uuid4()); provider=d.get('provider',''); doctor_id=d.get('doctor_id');
+   # location باید بیرون از if مقدار اولیه بگیرد؛ وگرنه وقتی doctor_id نیست
+   # (که شکل درخواستِ خودِ کلاینت است) INSERT با NameError می‌ترکد و ۵۰۰ می‌دهد
+   aid=str(uuid.uuid4()); provider=d.get('provider',''); location=d.get('location',''); doctor_id=d.get('doctor_id');
    if doctor_id:
     doc=c.execute('SELECT * FROM doctors WHERE id=?',(doctor_id,)).fetchone(); provider=doc['name'] if doc else provider; location=(doc['clinic']+' — '+doc['address']) if doc and doc['clinic'] else d.get('location','')
    c.execute('INSERT INTO appointments VALUES(?,?,?,?,?,?,?,?)',(aid,d.get('title','وقت پزشک'),provider,location,d.get('starts_at',''),int(d.get('reminder_minutes',60)), 'scheduled',now())); c.commit(); return send(self,201,{'id':aid,'ok':True,'provider':provider,'location':location})
@@ -671,14 +681,20 @@ class Handler(SimpleHTTPRequestHandler):
    fields=[d.get(k,'') for k in ('full_name','birth_date','blood_type','allergies','conditions','critical_meds','primary_doctor','emergency_contact')]
    c.execute('INSERT INTO emergency_card(id,full_name,birth_date,blood_type,allergies,conditions,critical_meds,primary_doctor,emergency_contact,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET full_name=excluded.full_name,birth_date=excluded.birth_date,blood_type=excluded.blood_type,allergies=excluded.allergies,conditions=excluded.conditions,critical_meds=excluded.critical_meds,primary_doctor=excluded.primary_doctor,emergency_contact=excluded.emergency_contact,updated_at=excluded.updated_at',(*fields,now())); c.commit(); return send(self,200,{'ok':True})
   if p=='/api/location':
-   lat=float(d.get('lat')); lon=float(d.get('lon')); lid=str(uuid.uuid4()); c.execute('INSERT INTO locations VALUES(?,?,?,?,?,?)',(lid,lat,lon,float(d.get('accuracy',0)),d.get('source','phone'),now())); outside=[]
+   lat=as_float(d.get('lat')); lon=as_float(d.get('lon'))
+   if lat is None or lon is None: return send(self,400,{'error':'coordinates_required','message':'مقدار lat و lon باید عدد باشد.'})
+   acc=as_float(d.get('accuracy',0)); acc=0.0 if acc is None else acc
+   lid=str(uuid.uuid4()); c.execute('INSERT INTO locations VALUES(?,?,?,?,?,?)',(lid,lat,lon,acc,d.get('source','phone'),now())); outside=[]
    for z in c.execute('SELECT * FROM safe_zones WHERE enabled=1').fetchall():
     dist=distance_m(lat,lon,z['lat'],z['lon']);
     if dist>z['radius_m']: outside.append({'zone':z['name'],'distance_m':round(dist)})
    if outside: c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(str(uuid.uuid4()),'safe_zone_exit','سالمند از محدوده امن خارج شده است.','warning','open',now()))
    c.commit(); return send(self,201,{'ok':True,'outside_zones':outside})
   if p=='/api/safe-zones':
-   zid=str(uuid.uuid4()); c.execute('INSERT INTO safe_zones VALUES(?,?,?,?,?,?,?)',(zid,d.get('name','خانه'),float(d.get('lat')),float(d.get('lon')),float(d.get('radius_m',200)),1,now())); c.commit(); return send(self,201,{'id':zid,'ok':True})
+   zlat=as_float(d.get('lat')); zlon=as_float(d.get('lon')); zrad=as_float(d.get('radius_m',200))
+   if zlat is None or zlon is None: return send(self,400,{'error':'coordinates_required','message':'مقدار lat و lon باید عدد باشد.'})
+   if zrad is None or zrad<=0: return send(self,400,{'error':'invalid_radius','message':'شعاع محدوده باید عددی بزرگ‌تر از صفر باشد.'})
+   zid=str(uuid.uuid4()); c.execute('INSERT INTO safe_zones VALUES(?,?,?,?,?,?,?)',(zid,d.get('name','خانه'),zlat,zlon,zrad,1,now())); c.commit(); return send(self,201,{'id':zid,'ok':True})
   if p=='/api/admin/ai-config':
    allowed=['provider','base_url','model','stt_provider','tts_provider','system_prompt','guardrails','voice_id','tone','temperature']
    current=c.execute('SELECT * FROM ai_config WHERE id=1').fetchone(); values={k:d.get(k,current[k] if current else '') for k in allowed}
@@ -690,7 +706,10 @@ class Handler(SimpleHTTPRequestHandler):
    c.execute('INSERT INTO profile(id,name,age,needs,assistant_name,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,age=excluded.age,needs=excluded.needs,assistant_name=excluded.assistant_name,updated_at=excluded.updated_at',(d.get('name',''),d.get('age'),d.get('needs',''),d.get('assistant_name','سپندیار'),now())); c.commit(); return send(self,200,{'ok':True})
   if p=='/api/caregivers':
    _ph=str(d.get('phone','')).strip()
-   if _ph and c.execute('SELECT id FROM caregivers WHERE phone=?',(_ph,)).fetchone():
+   # شماره هم شناسهٔ مراقب است هم عامل ورود؛ مراقب بی‌شماره هرگز نمی‌تواند وارد شود
+   # و با قید یکتا، ساخت دومین مراقب بی‌شماره به IntegrityError و ۵۰۰ می‌انجامید
+   if not _ph: return send(self,400,{'error':'phone_required','message':'شمارهٔ همراه مراقب الزامی است.'})
+   if c.execute('SELECT id FROM caregivers WHERE phone=?',(_ph,)).fetchone():
     return send(self,409,{'error':'caregiver_exists','message':'این شماره پیش‌تر به عنوان مراقب ثبت شده است.'})
    cid=str(uuid.uuid4()); code=new_invite_code()
    c.execute('INSERT INTO caregivers(id,name,phone,role,permissions,created_at,invite_code,failed_attempts,locked_until) VALUES(?,?,?,?,?,?,?,?,NULL)',(cid,d.get('name',''),d.get('phone',''),d.get('role','family'),json.dumps(d.get('permissions',[]),ensure_ascii=False),now(),code,0)); c.commit()
