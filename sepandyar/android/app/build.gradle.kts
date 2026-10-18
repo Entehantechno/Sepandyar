@@ -8,3 +8,9 @@ android { namespace = "ai.arena.sepandyar"; compileSdk = 35
 }
 
 android.buildFeatures.buildConfig = true
+
+dependencies {
+    // WebViewAssetLoader: سرو کردن دارایی‌ها روی مبدأ https مجازی تا زمینهٔ امن
+    // (میکروفون، service worker و fetch) در دسترس باشد.
+    implementation("androidx.webkit:webkit:1.12.1")
+}

@@ -9,8 +9,11 @@ import android.os.Bundle
 import android.provider.Settings
 import android.net.Uri
 import android.webkit.JavascriptInterface
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
-import android.webkit.WebViewClient
+import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewClientCompat
 
 class MainActivity : Activity() {
     private lateinit var web: WebView
@@ -19,13 +22,26 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // دارایی‌ها را روی مبدأ https مجازی سرو می‌کنیم. بارگذاری از file:///android_asset
+        // یک «مبدأ مات» است و fetch/getUserMedia/service worker را می‌بندد.
+        val assetLoader = WebViewAssetLoader.Builder()
+            .setDomain(WebViewAssetLoader.DEFAULT_DOMAIN)
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
         web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
-            webViewClient = WebViewClient()
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            settings.allowFileAccessFromFileURLs = false
+            settings.allowUniversalAccessFromFileURLs = false
+            webViewClient = object : WebViewClientCompat() {
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+                    assetLoader.shouldInterceptRequest(request.url)
+            }
             addJavascriptInterface(AppBridge(), "SepandyarNative")
-            loadUrl("file:///android_asset/index.html")
+            loadUrl("https://" + WebViewAssetLoader.DEFAULT_DOMAIN + "/assets/index.html")
         }
         setContentView(web)
         // نتیجه هر کار کنترل صفحه به رابط وب برمی‌گردد
@@ -44,6 +60,9 @@ class MainActivity : Activity() {
         }
         @JavascriptInterface fun openAppSettings() { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
         @JavascriptInterface fun setAssistantName(name: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("name", name).apply() }
+        // آدرس سرور سپندیار؛ لایه وب در نخستین اجرا آن را می‌خواند و در localStorage هم نگه می‌دارد
+        @JavascriptInterface fun getServerUrl(): String = getSharedPreferences("assistant", MODE_PRIVATE).getString("server_url", "") ?: ""
+        @JavascriptInterface fun saveServerUrl(url: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("server_url", url.trim()).apply() }
         @JavascriptInterface fun saveVoiceProfile(samples: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("voice_samples", samples).putLong("voice_enrolled_at", System.currentTimeMillis()).apply() }
         @JavascriptInterface fun callCaregiver(phone: String) { if (phone.isNotBlank()) startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))) }
         @JavascriptInterface fun tvCommand(command: String): Boolean { return TvCommandRouter.execute(this@MainActivity, command) }

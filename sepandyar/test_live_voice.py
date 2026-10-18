@@ -157,14 +157,23 @@ check('سؤال درمانی مبهم به ارجاع می‌رود',r2.get('saf
 st,r3=req(BASE,'/api/conversation','POST',{'text':'سلام حالت چطوره','profile':'default','source':'live'})
 check('گپ معمولی ایمن است',r3.get('safety')=='normal',r3.get('safety'))
 
-# شکاف شناخته‌شده در assess_risk (لایهٔ مرحلهٔ ۲): تطبیق فقط زیررشتهٔ دقیق است.
-# این دو بررسی رفتار فعلی را ثبت می‌کنند تا اگر روزی اصلاح شد، آزمون هشدار بدهد.
+# این دو مورد قبلاً شکاف بودند (تطبیق زیررشتهٔ صرف) و اکنون باید گرفته شوند
 st,g1=req(BASE,'/api/conversation','POST',{'text':'درد شدید قفسه سینه دارم','profile':'default','source':'live'})
-print('   ⚠ شکاف شناخته‌شده: «درد شدید قفسه سینه» →',g1.get('safety'),'(قاعده «درد قفسه سینه» به‌خاطر واژهٔ میانی «شدید» نمی‌گیرد)')
-check('شکاف ثبت‌شده: واژهٔ میانی تطبیق زیررشته‌ای را می‌شکند',g1.get('safety')=='normal',g1.get('safety'))
+check('واژهٔ میانی دیگر تطبیق را نمی‌شکند',g1.get('safety')=='urgent' and g1.get('intent')=='safety.emergency',(g1.get('safety'),g1.get('intent')))
 st,g2=req(BASE,'/api/conversation','POST',{'text':'نفسم نمیاد','profile':'default','source':'live'})
-print('   ⚠ شکاف شناخته‌شده: «نفسم نمیاد» →',g2.get('safety'),'(محاوره‌ای است و هیچ قاعده‌ای نمی‌گیرد)')
-check('شکاف ثبت‌شده: عبارت محاوره‌ای تنگی نفس گرفته نمی‌شود',g2.get('safety')=='normal',g2.get('safety'))
+check('عبارت محاوره‌ای تنگی نفس گرفته می‌شود',g2.get('safety')=='urgent',(g2.get('safety'),g2))
+st,g3=req(BASE,'/api/conversation','POST',{'text':'سینه‌ام درد می‌کند','profile':'default','source':'live'})
+check('ترتیب وارونهٔ واژه‌ها هم گرفته می‌شود',g3.get('safety')=='urgent',(g3.get('safety'),g3))
+st,g4=req(BASE,'/api/conversation','POST',{'text':'داروهایم را سر وقت خوردم','profile':'default','source':'live'})
+check('گزارش عادی دارو به اورژانس نمی‌رود',g4.get('safety')=='normal',(g4.get('safety'),g4))
+st,g5=req(BASE,'/api/conversation','POST',{'text':'فشار خونم امروز خوب بود','profile':'default','source':'live'})
+check('گزارش عادی فشار خون به اورژانس نمی‌رود',g5.get('safety')=='normal',(g5.get('safety'),g5))
+
+print('--- 8b) حذف تکرار هشدار در گاردریل زنده ---')
+html_guard=open(os.path.join(ROOT,'index.html'),encoding='utf-8').read()
+check('کلید آخرین عبارت رهگیری‌شده نگه داشته می‌شود','lastGuardKey' in html_guard,'')
+check('پنجرهٔ زمانی حذف تکرار وجود دارد','nowMs-lastGuardAt<20000' in html_guard,'')
+check('متن پیش از ارسال یکسان‌سازی می‌شود',"replace(/\\s+/g,' ')" in html_guard,'')
 
 # ---------- ۹) قرارداد کلاینت (index.html) ----------
 print('--- 9) قرارداد کلاینت در index.html ---')

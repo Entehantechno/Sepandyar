@@ -72,7 +72,9 @@ def db():
  for nm,esc,so in symp: c.execute('INSERT OR IGNORE INTO symptom_catalog(name,escalate,sort_order) VALUES(?,?,?)',(nm,esc,so))
  crit_reply='این وضعیت را نمی‌توانم از راه دور تشخیص دهم و اجازه اظهار نظر بالینی ندارم. لطفاً همین حالا با مراقب خود یا اورژانس ۱۱۵ تماس بگیرید. اگر اجازه بدهید، درخواست تماس را برای مراقب اصلی شما می‌فرستم.'
  refer_reply='این پرسش نیازمند نظر پزشک یا داروساز است؛ من اجازه تشخیص یا تغییر دارو ندارم. می‌توانم همین پرسش را برای مراقب شما بفرستم تا با پزشک مطرح شود.'
- rules=[('critical','emergency',crit_reply,['درد قفسه سینه','درد سینه','سنگینی سینه','تنگی نفس','نفس نمی‌کشم','نمی‌توانم نفس بکشم','از حال رفتم','غش کردم','بیهوش شدم','تشنج','سکته','بی‌حسی صورت','کج شدن صورت','خونریزی شدید','زمین خوردم','خودکشی','می‌خواهم بمیرم']),
+ rules=[('critical','emergency',crit_reply,['درد قفسه سینه','درد سینه','سنگینی سینه','تنگی نفس','نفس نمی‌کشم','نمی‌توانم نفس بکشم','از حال رفتم','غش کردم','بیهوش شدم','تشنج','سکته','بی‌حسی صورت','کج شدن صورت','خونریزی شدید','زمین خوردم','خودکشی','می‌خواهم بمیرم',
+         # گونه‌های محاوره‌ای همان دو اورژانس (قفسه سینه و تنگی نفس)؛ سالمند کتابی حرف نمی‌زند
+         'درد قلب','قلبم درد','سینه درد','نفسم نمیاد','نفس نمیاد','نمیتونم نفس','نمیتوانم نفس','خفتم','خفه میشم']),
         ('ambiguous','refer_professional',refer_reply,['دوز دارو','مقدار دارو','دارو را قطع','قرص را قطع','چه بیماری دارم','چه‌ام هست','تداخل دارویی','جایگزین دارو','نسخه بنویس','تجویز کن'])]
  for lvl,act,reply,pats in rules:
   for pat in pats: c.execute('INSERT OR IGNORE INTO safety_rules(id,level,pattern,action,reply,updated_at) VALUES(?,?,?,?,?,?)',(lvl+'::'+pat,lvl,pat,act,reply,now()))
@@ -352,10 +354,30 @@ def fetch_images(c,query,count=2):
  try: c.execute('INSERT INTO image_cache VALUES(?,?,?,?)',(q,json.dumps(items,ensure_ascii=False),source,now()))
  except sqlite3.IntegrityError: c.execute('UPDATE image_cache SET items=?,source=?,fetched_at=? WHERE query=?',(json.dumps(items,ensure_ascii=False),source,now(),q))
  c.commit(); return items
+FA_CLITICS=('مان','تان','شان','های','ها','ام','ات','ش','م','ی','ای')
+def _stem(w):
+ w=norm_fa(w).replace('\u200c','')
+ for suf in FA_CLITICS:
+  if len(w)>len(suf)+2 and w.endswith(suf): return w[:-len(suf)]
+ return w
+def _pattern_hits(pattern,text):
+ """ابتدا زیررشتهٔ دقیق، و در نبود آن تطبیق واژه‌به‌واژهٔ بی‌ترتیب با ریشه‌یابی سبک.
+
+ علت: «درد شدید قفسه سینه» و «سینه‌ام درد می‌کند» هر دو باید قاعدهٔ «درد قفسه سینه» را
+ بزنند؛ تطبیق زیررشتهٔ صرف هر دو را از دست می‌داد. سوگیری عمداً به سمت recall است:
+ در سامانهٔ سالمند، یک هشدار اضافی بسیار کم‌خطرتر از یک اورژانسِ ازدست‌رفته است.
+"""
+ p=norm_fa(pattern); t=norm_fa(text)
+ if not p or not t: return False
+ if p in t: return True
+ toks=[x for x in p.split() if x]
+ if len(toks)<2: return False
+ stems=[_stem(w) for w in t.split() if w]
+ return all(any(_stem(x)==s or (_stem(x) in s) or (s in _stem(x)) for s in stems) for x in toks)
 def assess_risk(c,text):
  t=normalize_fa(text).lower()
  for r in c.execute("SELECT * FROM safety_rules ORDER BY CASE level WHEN 'critical' THEN 0 ELSE 1 END, pattern").fetchall():
-  if r['pattern'].lower() in t: return {'level':r['level'],'matched':r['pattern'],'action':r['action'],'reply':r['reply']}
+  if _pattern_hits(r['pattern'],t): return {'level':r['level'],'matched':r['pattern'],'action':r['action'],'reply':r['reply']}
  return {'level':'normal','matched':None,'action':None,'reply':None}
 def enqueue_caregiver_action(c,kind,payload,requested_by='senior'):
  aid=str(uuid.uuid4()); c.execute('INSERT INTO caregiver_actions VALUES(?,?,?,?,?,?,NULL,NULL)',(aid,kind,json.dumps(payload,ensure_ascii=False),'pending',requested_by,now())); return aid
@@ -447,8 +469,12 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/realtime/session':
    key=os.getenv('OPENAI_API_KEY','')
    if not key: return send(self,503,{'error':'realtime_not_configured','message':'OPENAI_API_KEY در محیط سرور ثبت نشده است.'})
-   cfg=c.execute('SELECT * FROM ai_config WHERE id=1').fetchone(); model=(cfg['model'] if cfg and cfg['model'] else 'gpt-realtime-2.1'); tone=(cfg['tone'] if cfg else 'گرم و کوتاه'); prompt=(cfg['system_prompt'] if cfg else 'دستیار فارسی سالمندان هستی.')+'\nلحن: '+tone+'\nGuardrails: '+(cfg['guardrails'] if cfg else '')
-   payload={'session':{'type':'realtime','model':model,'output_modalities':['audio'],'audio':{'input':{'turn_detection':{'type':'semantic_vad'}},'output':{'voice':(cfg['voice_id'] if cfg and cfg['voice_id'] else 'marin')}},'instructions':prompt}}
+   cfg=c.execute('SELECT * FROM ai_config WHERE id=1').fetchone(); model=(cfg['model'] if cfg and cfg['model'] else 'gpt-realtime-2.1'); tone=(cfg['tone'] if cfg else 'گرم و کوتاه'); prompt=(cfg['system_prompt'] if cfg else 'دستیار فارسی سالمندان هستی.')+'\nلحن: '+tone+'\nGuardrails: '+(cfg['guardrails'] if cfg else '')+'\nهمیشه به فارسی معیار ایران با تلفظ تهرانی صحبت کن، نه دری افغانی.'
+   # صبر گفتاری کاربر باید به خودِ مدل برسد. semantic_vad پارامترهای زمانی را نمی‌پذیرد،
+   # پس server_vad با silence_duration_ms برابر patience_ms پروفایل کاربر.
+   rpid=parse_qs(urlparse(self.path).query).get('id',['default'])[0]
+   pat=live_vad_config(get_voice_profile(c,rpid)['patience_ms'])['silenceDurationMs']
+   payload={'session':{'type':'realtime','model':model,'output_modalities':['audio'],'audio':{'input':{'turn_detection':{'type':'server_vad','silence_duration_ms':pat,'prefix_padding_ms':120,'create_response':True,'interrupt_response':True}},'output':{'voice':(cfg['voice_id'] if cfg and cfg['voice_id'] else 'marin')}},'instructions':prompt}}
    try:
     r=ureq.Request('https://api.openai.com/v1/realtime/client_secrets',data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','OpenAI-Safety-Identifier':hashlib.sha256(b'sepandyar-local-user').hexdigest()},method='POST')
     with ureq.urlopen(r,timeout=15) as resp: return send(self,200,json.loads(resp.read()))
