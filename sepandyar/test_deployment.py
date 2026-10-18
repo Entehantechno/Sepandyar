@@ -426,6 +426,90 @@ for _e in _eps:
 check('جاروی %d اندپوینت POST: هیچ‌کدام 500 نمی‌دهد'%len(_eps),not _sweep,_sweep[:6])
 
 print()
+print('--- 11) XSS ذخیره‌شده در داشبوردها ---')
+# زنجیرهٔ حملهٔ اثبات‌شده:
+#   ۱) POST /api/symptoms (بی‌احراز هویت) با symptom = <img src=x onerror=...>
+#   ۲) سرور دست‌نخورده ذخیره و در /api/caregiver/panel برمی‌گرداند
+#   ۳) caregiver.html با الحاق رشته در innerHTML می‌گذاشت -> اسکریپت در مبدأ مراقب
+#      اجرا می‌شد و localStorage['cgToken'] را می‌دزدید
+# دفاع، رمزگذاری خروجی در نقطهٔ رندر است (پژوهش: این «اصلاحی است که آسیب‌پذیری را
+# تمام می‌کند»). CSP با unsafe-inline بیشتر هدف CSP را نابود می‌کند و nonce ها هم
+# handler های درون‌خطی را پوشش نمی‌دهند، پس در این کدبیس راه اصلی نیست.
+
+cghtml=open(os.path.join(ROOT,'caregiver.html'),encoding='utf-8').read()
+adhtml=open(os.path.join(ROOT,'admin.html'),encoding='utf-8').read()
+
+for name,src in [('caregiver.html',cghtml),('admin.html',adhtml),('index.html',html)]:
+    check(name+' تابع esc() دارد','function esc(v)' in src)
+    check(name+" esc هر پنج نویسهٔ خطرناک را می‌گیرد",
+          all(t in src for t in ["&amp;","&lt;","&gt;","&quot;","&#39;"]))
+
+# caregiver/index مقادیری داخل onclick دارند -> jsa لازم است
+for name,src in [('caregiver.html',cghtml),('index.html',html)]:
+    check(name+' تابع jsa() برای بافت onclick دارد','function jsa(v)' in src)
+
+# --- رفتار واقعی رمزگذارها، با اجرای node روی خودِ توابع فایل ---
+def node_check(fns,js):
+    code=fns+"\n"+js
+    r=subprocess.run(['node','-e',code],capture_output=True,text=True,timeout=30)
+    return r.stdout.strip(),r.stderr.strip()
+
+def extract_fns(src):
+    i=src.find('function esc(v)')
+    j=src.find('function jsa(v)')
+    if j<0: return src[i:src.find('\n',src.find('}',i)+1)]
+    k=src.find('\n',src.find('return esc(',j)+1)
+    return src[i:k]
+
+esc_care=extract_fns(cghtml)
+out,err=node_check(esc_care,
+  "const v='<img src=x onerror=\"alert(1)\">';"
+  "const h=esc(v);"
+  "console.log(JSON.stringify({lt:h.includes('<img'),amp:h.includes('&lt;'),raw:h===v}));")
+try:
+    r=json.loads(out)
+    check('esc() برچسب را به متن تبدیل می‌کند',r['lt'] is False and r['amp'] is True,(out,err))
+except Exception:
+    check('esc() برچسب را به متن تبدیل می‌کند',False,(out,err))
+
+# payload داخل onclick نباید از رشتهٔ JS بیرون بزند
+out,err=node_check(esc_care,
+  "let fired=[];global.alert=x=>fired.push('alert:'+x);global.saveSymptom=n=>fired.push('sym:'+n);"
+  "function dec(h){return h.replace(/&quot;/g,'\"').replace(/&#39;/g,\"'\").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')}"
+  "const evil=\"a');alert('PWNED');//\";"
+  "const attr=\"saveSymptom('\"+jsa(evil)+\"')\";"
+  "try{eval(dec(attr))}catch(e){}"
+  "console.log(JSON.stringify({fired:fired}));")
+try:
+    r=json.loads(out)
+    check('payload داخل onclick اجرا نمی‌شود',
+          not any(str(x).startswith('alert:') for x in r['fired']),(out,err))
+    check('payload به‌عنوان داده به تابع می‌رسد',
+          any(str(x).startswith('sym:') for x in r['fired']),(out,err))
+except Exception:
+    check('payload داخل onclick اجرا نمی‌شود',False,(out,err))
+
+# --- سرور داده را دست‌نخورده نگه می‌دارد (دفاع در رندر است نه در ذخیره) ---
+PAY='<img src=x onerror="alert(document.domain)">'
+st,d=req(BASE,'/api/symptoms','POST',{'symptom':PAY,'severity':'متوسط','source':'test'})
+check('ذخیرهٔ علامت با payload پذیرفته می‌شود',st==201,st)
+st,d=req(BASE,'/api/symptoms')
+check('سرور payload را دست‌نخورده برمی‌گرداند (رمزگذاری در رندر است)',
+      any(PAY==x.get('symptom') for x in d.get('items',[])),'')
+
+# --- هیچ الحاق بی‌رمزِ دادهٔ سرور در رندر نمانده باشد ---
+import re as _re2
+for name,src in [('caregiver.html',cghtml),('admin.html',adhtml)]:
+    leaks=[]
+    for m in _re2.finditer(r'innerHTML=',src):
+        seg=src[m.start():m.start()+900]
+        e=_re2.search(r"';(?:const|document|if|let|var|function|await|return|window)\b",seg)
+        if e: seg=seg[:e.start()+1]
+        for f in _re2.finditer(r"'\s*\+\s*([A-Za-z_$][\w$]*\.[\w$]+)\s*\+\s*'",seg):
+            leaks.append(f.group(1))
+    check(name+' الحاق بی‌رمز دادهٔ سرور در innerHTML ندارد',not leaks,leaks[:6])
+
+print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
 if failures:
     print('شکست‌ها:'); [print(' -',f) for f in failures]
