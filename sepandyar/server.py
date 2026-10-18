@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """سپندیار — local MVP API. Production needs real auth, TLS, payment provider and managed DB."""
-import json, sqlite3, os, uuid, datetime, hashlib, urllib.request as ureq, urllib.error as uerr
+import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote, parse_qs
 ROOT=os.path.dirname(__file__); DB=os.path.join(ROOT,'sepandyar.db')
 def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat()
 def db():
@@ -43,7 +43,10 @@ def db():
  CREATE TABLE IF NOT EXISTS caregiver_sessions(token TEXT PRIMARY KEY,phone TEXT,created_at TEXT,expires_at TEXT);
  CREATE TABLE IF NOT EXISTS safety_rules(id TEXT PRIMARY KEY,level TEXT,pattern TEXT,action TEXT,reply TEXT,updated_at TEXT);
  CREATE TABLE IF NOT EXISTS approved_apps(package TEXT PRIMARY KEY,label TEXT,category TEXT,icon TEXT,plan TEXT,enabled INTEGER DEFAULT 1,updated_at TEXT);
- CREATE TABLE IF NOT EXISTS screen_task_runs(id TEXT PRIMARY KEY,app_package TEXT,title TEXT,status TEXT,steps_total INTEGER,steps_done INTEGER,error TEXT,started_at TEXT,finished_at TEXT);''')
+ CREATE TABLE IF NOT EXISTS screen_task_runs(id TEXT PRIMARY KEY,app_package TEXT,title TEXT,status TEXT,steps_total INTEGER,steps_done INTEGER,error TEXT,started_at TEXT,finished_at TEXT);
+ CREATE TABLE IF NOT EXISTS intent_lexicon(id TEXT PRIMARY KEY,label TEXT,action TEXT,keywords TEXT,image_query TEXT,priority INTEGER DEFAULT 0);
+ CREATE TABLE IF NOT EXISTS image_cache(query TEXT PRIMARY KEY,items TEXT,source TEXT,fetched_at TEXT);
+ CREATE TABLE IF NOT EXISTS disambiguation_events(id TEXT PRIMARY KEY,transcript TEXT,confidence REAL,options TEXT,chosen TEXT,resolved INTEGER DEFAULT 0,created_at TEXT);''')
  defaults=[('systolic','90','140','80','180'),('diastolic','60','90','50','120'),('glucose','70','180','54','300'),('weight','0','1000','0','1000')]
  for t,nmin,nmax,cmin,cmax in defaults: c.execute('INSERT OR IGNORE INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?)',(t,nmin,nmax,cmin,cmax,'system',now()))
  cols=[x[1] for x in c.execute('PRAGMA table_info(transactions)').fetchall()]
@@ -74,6 +77,18 @@ def db():
        ('cab.snapp.passenger','اسنپ','تاکسی','🚕',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'کجا می‌روید','timeout_ms':9000},{'type':'input_text','payload':'خیابان ولیعصر','timeout_ms':6000},{'type':'tap_text','payload':'درخواست خودرو','timeout_ms':12000}]),
        ('com.android.chrome','کروم','مرورگر','🌐',[{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'جست‌وجو یا وارد کردن نشانی','timeout_ms':9000},{'type':'input_text','payload':'نوبت پزشک','timeout_ms':6000}])]
  for pkg,label,cat,icon,steps in apps: c.execute('INSERT OR IGNORE INTO approved_apps VALUES(?,?,?,?,?,?,?)',(pkg,label,cat,icon,json.dumps({'steps':steps},ensure_ascii=False),1,now()))
+ lex=[('meds','داروهای من','meds',['دارو','قرص','داروها','داروی من','داروهایم'],'medicine pills blister pack on table',90),
+      ('vitals','فشار خون و قند','vitals',['فشار','قند','فشار خون','قند خون','علائم حیاتی','وزن'],'home blood pressure monitor device',85),
+      ('symptom','اعلام علامت و ناراحتی','symptom',['علامت','درد','سرگیجه','حالم بد','خوب نیستم','تهوع','تنگی نفس','ناراحت'],'elderly patient talking with nurse at home',80),
+      ('caregiver_call','تماس با مراقب','caregiver_call',['مراقب','تماس','زنگ','خانواده','پسرم','دخترم','کمکم'],'elderly person talking on phone with family',88),
+      ('food_order','سفارش خرید خانه','food_order',['خرید','سفارش','نان','شیر','سوپر','فروشگاه'],'grocery shopping bags with bread and milk',70),
+      ('taxi','گرفتن تاکسی','taxi',['تاکسی','اسنپ','بروم','برسان','سفر','بیرون'],'taxi car waiting on city street',68),
+      ('education','نکته بهداشتی','education',['نکته','آموزش','بهداشتی','یاد بده','توصیه'],'health education pamphlet for seniors',60),
+      ('wallet','کیف پول و موجودی','wallet',['کیف پول','موجودی','پول','شارژ','پرداخت'],'leather wallet with money and cards',55),
+      ('appointment','نوبت پزشک','appointment',['نوبت','پزشک','دکتر','ویزیت','کلینیک','بیمارستان'],'doctor appointment at clinic reception',75),
+      ('screen_control','کنترل اپ‌ها','screen_control',['اپ','اپلیکیشن','تلویزیون','کنترل','گوشی'],'smartphone screen with large app icons',50),
+      ('chat','گفت‌وگو و هم‌صحبتی','chat',['حرف','صحبت','گپ','تنها','تنهایی','حوصله','دلم گرفته','بشنو','خاطره'],'two elderly friends having a friendly conversation',45)]
+ for lid,label,action,kws,iq,prio in lex: c.execute('INSERT OR IGNORE INTO intent_lexicon VALUES(?,?,?,?,?,?)',(lid,label,action,json.dumps(kws,ensure_ascii=False),iq,prio))
  c.commit(); return c
 def body(h):
  try: n=int(h.headers.get('Content-Length','0')); return json.loads(h.rfile.read(n) or '{}')
@@ -131,6 +146,74 @@ def report_html(data):
  tr=''.join(f"<tr><td>{x.get('type','')}</td><td>{x.get('value','')}</td><td>{x.get('source','')}</td><td>{x.get('measured_at','')}</td></tr>" for x in items)
  return f'''<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><title>گزارش سلامت — سپندیار</title><style>body{{font-family:Tahoma,Arial;max-width:900px;margin:30px auto;padding:0 18px;color:#18312f}}h1{{color:#347d6d}}table{{width:100%;border-collapse:collapse}}td,th{{padding:12px;border-bottom:1px solid #dfe9e4;text-align:right}}.note{{background:#eef8f3;padding:14px;border-radius:12px}}</style><h1>گزارش علائم حیاتی</h1><div class="note">این لینک تا {data['expires_at']} معتبر است. اطلاعات با اجازه سالمند به اشتراک گذاشته شده است.</div><h2>{p.get('name','سالمند')}</h2><p>سن: {p.get('age','ثبت نشده')} — شرایط ثبت‌شده: {p.get('needs','ثبت نشده')}</p><table><tr><th>نوع</th><th>مقدار</th><th>منبع</th><th>زمان</th></tr>{tr}</table><p style="color:#71807c">این گزارش جایگزین تشخیص پزشک نیست.</p></html>'''
 def normalize_fa(t): return str(t or '').replace('ي','ی').replace('ك','ک')
+# ---- رفع ابهام گفتار سالمند با تصویر (پژوهش‌محور: پرسش کوتاه، تأییدی، بدون نام فنی) ----
+IMAGE_UA='Sepandyar/0.3 (elderly voice assistant; contact: team@sepandyar.local)'
+OPENVERSE_URL='https://api.openverse.org/v1/images/'
+COMMONS_URL='https://commons.wikimedia.org/w/api.php'
+SMALLTALK=('سلام','درود','خوبی','خوبید','حالت','ممنون','مرسی','تشکر','خداحافظ','بله','خیر','باشه','چطوری','خوبم','خوب','بد نیستم','سلامت')
+def norm_fa(t): return re.sub(r'[ًٌٍَُِّْ]','',str(t or '').replace('ي','ی').replace('ك','ک').lower()).strip()
+def is_smalltalk(t):
+ t=norm_fa(t)
+ return bool(t) and len(t.split())<=2 and any(k in t for k in SMALLTALK)
+def match_candidates(c,text,limit=2):
+ t=norm_fa(text)
+ if not t: return []
+ scored=[]
+ for r in rows(c,'SELECT * FROM intent_lexicon ORDER BY priority DESC'):
+  best=0
+  for kw in json.loads(r['keywords'] or '[]'):
+   k=norm_fa(kw)
+   if not k: continue
+   if k in t or t in k: best=max(best,100); continue
+   ratio=difflib.SequenceMatcher(None,k,t).ratio()
+   for w in t.split():
+    if len(w)>2: ratio=max(ratio,difflib.SequenceMatcher(None,k,w).ratio())
+   if ratio>=0.62: best=max(best,int(ratio*90))
+  if best>0: scored.append((best,r))
+ scored.sort(key=lambda x:-x[0])
+ return [{'id':r['id'],'label':r['label'],'action':r['action'],'image_query':r['image_query'],'score':s} for s,r in scored[:limit]]
+def net_json(url,timeout=6):
+ req=ureq.Request(url,headers={'User-Agent':IMAGE_UA,'Accept':'application/json'})
+ with ureq.urlopen(req,timeout=timeout) as r: return json.loads(r.read())
+def images_from_openverse(query,count):
+ data=net_json(OPENVERSE_URL+'?q='+quote(query)+'&page_size='+str(max(count,2)))
+ out=[]
+ for it in (data.get('results') or [])[:count]:
+  lic=str(it.get('license') or '').upper()
+  if it.get('license_version'): lic=(lic+' '+str(it.get('license_version'))).strip()
+  out.append({'url':it.get('url'),'thumbnail':it.get('thumbnail') or it.get('url'),'title':(it.get('title') or '')[:120],'author':it.get('creator') or '','license':lic,'attribution':it.get('attribution') or '','source':'openverse','page_url':it.get('foreign_landing_url')})
+ return out
+def images_from_commons(query,count):
+ url=(COMMONS_URL+'?action=query&format=json&generator=search&gsrnamespace=6&gsrlimit='+str(max(count,2))+'&gsrsearch='+quote(query)+'&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=640')
+ data=net_json(url); pages=((data.get('query') or {}).get('pages') or {})
+ out=[]
+ for pg in list(pages.values())[:count]:
+  ii=(pg.get('imageinfo') or [{}])[0]; em=ii.get('extmetadata') or {}
+  def meta(k): return re.sub('<[^>]+>','',(em.get(k) or {}).get('value','') or '').strip()
+  lic=meta('LicenseShortName'); artist=meta('Artist')
+  out.append({'url':ii.get('url'),'thumbnail':ii.get('thumburl') or ii.get('url'),'title':pg.get('title','').replace('File:','')[:120],'author':artist,'license':lic,'attribution':((artist+' — ') if artist else '')+(lic+'، از Wikimedia Commons') if (artist or lic) else 'Wikimedia Commons','source':'commons','page_url':ii.get('descriptionurl')})
+ return out
+IMAGE_NET={'blocked_until':0.0}
+def fetch_images(c,query,count=2):
+ """جست‌وجوی تصویر با کش محلی؛ اگر اینترنت در دسترس نبود، پاسخ آفلاین برمی‌گرداند تا پاپ‌آپ هرگز خالی نماند."""
+ q=norm_fa(query)
+ hit=c.execute('SELECT * FROM image_cache WHERE query=?',(q,)).fetchone()
+ if hit:
+  try: return json.loads(hit['items'])
+  except Exception: pass
+ items=[]; source='offline'
+ if time.time()>=IMAGE_NET['blocked_until']:
+  for fn in (images_from_openverse,images_from_commons):
+   try:
+    items=fn(query,count)
+    if items: source=items[0].get('source') or 'online'; break
+   except Exception: items=[]
+  if not items: IMAGE_NET['blocked_until']=time.time()+90
+ if not items:
+  items=[{'url':None,'thumbnail':None,'title':query,'author':'','license':'','attribution':'','source':'offline','page_url':None} for _ in range(count)]
+ try: c.execute('INSERT INTO image_cache VALUES(?,?,?,?)',(q,json.dumps(items,ensure_ascii=False),source,now()))
+ except sqlite3.IntegrityError: c.execute('UPDATE image_cache SET items=?,source=?,fetched_at=? WHERE query=?',(json.dumps(items,ensure_ascii=False),source,now(),q))
+ c.commit(); return items
 def assess_risk(c,text):
  t=normalize_fa(text).lower()
  for r in c.execute("SELECT * FROM safety_rules ORDER BY CASE level WHEN 'critical' THEN 0 ELSE 1 END, pattern").fetchall():
@@ -241,6 +324,12 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/symptoms/catalog': return send(self,200,{'items':rows(c,'SELECT name,escalate FROM symptom_catalog ORDER BY sort_order')})
   if p=='/api/symptoms': return send(self,200,{'items':rows(c,'SELECT * FROM symptom_reports ORDER BY created_at DESC LIMIT 50')})
   if p=='/api/safety/rules': return send(self,200,{'items':rows(c,'SELECT level,pattern,action,reply FROM safety_rules ORDER BY level,pattern')})
+  if p=='/api/intents': return send(self,200,{'items':rows(c,'SELECT id,label,action,image_query,priority FROM intent_lexicon ORDER BY priority DESC')})
+  if p=='/api/images/search':
+   qs=parse_qs(urlparse(self.path).query); q=(qs.get('q') or [''])[0]; cnt=min(int((qs.get('count') or ['2'])[0] or 2),6)
+   if not q.strip(): return send(self,400,{'error':'q_required'})
+   return send(self,200,{'items':fetch_images(c,q,cnt),'query':q})
+  if p=='/api/disambiguation/history': return send(self,200,{'items':rows(c,'SELECT * FROM disambiguation_events ORDER BY created_at DESC LIMIT 50')})
   if p=='/api/apps/approved':
    items=[]
    for x in rows(c,'SELECT * FROM approved_apps WHERE enabled=1 ORDER BY category,label'):
@@ -385,6 +474,33 @@ class Handler(SimpleHTTPRequestHandler):
     resp.update({'alert_id':aid,'action_id':act,'reply':'این علامت را ثبت کردم و فوراً به مراقب شما اطلاع دادم. لطفاً منتظر تماس او باشید.'})
    else: resp['reply']='علامت «'+sym+'» را ثبت کردم و در گزارش مراقب شما قرار دادم.'
    c.commit(); return send(self,201,resp)
+  if p=='/api/disambiguate':
+   text=str(d.get('text','')); conf=d.get('confidence')
+   try: conf=float(conf) if conf is not None else None
+   except Exception: conf=None
+   limit=min(max(int(d.get('limit') or 2),2),3)
+   cands=match_candidates(c,text,limit)
+   if len(cands)<2:
+    for r in rows(c,'SELECT * FROM intent_lexicon ORDER BY priority DESC LIMIT 5'):
+     if r['id'] not in [x['id'] for x in cands]: cands.append({'id':r['id'],'label':r['label'],'action':r['action'],'image_query':r['image_query'],'score':0})
+     if len(cands)>=2: break
+   if len(cands)<2: return send(self,200,{'needs_clarification':False,'reason':'not_enough_candidates','repeat_prompt':'متوجه نشدم؛ لطفاً آرام‌تر و کوتاه‌تر بگویید.'})
+   opts=[]
+   for x in cands[:2]:
+    imgs=fetch_images(c,x['image_query'],1)
+    opts.append({'id':x['id'],'label':x['label'],'action':x['action'],'image':(imgs[0] if imgs else None),'score':x['score']})
+   eid=str(uuid.uuid4())
+   c.execute('INSERT INTO disambiguation_events VALUES(?,?,?,?,?,?,?)',(eid,text[:300],conf,json.dumps([o['id'] for o in opts],ensure_ascii=False),'',0,now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'disambiguation_asked',json.dumps({'confidence':conf},ensure_ascii=False),now())); c.commit()
+   return send(self,200,{'id':eid,'needs_clarification':True,'question':'منظورتان کدام یک است؟','spoken':'منظورتان کدام است؟ اولی، '+opts[0]['label']+'؟ یا دومی، '+opts[1]['label']+'؟','options':opts,'transcript':text,'confidence':conf})
+  if p=='/api/disambiguate/resolve':
+   eid=str(d.get('id','')); chosen=str(d.get('chosen',''))
+   row=c.execute('SELECT * FROM disambiguation_events WHERE id=?',(eid,)).fetchone()
+   if not row: return send(self,404,{'error':'session_not_found'})
+   c.execute('UPDATE disambiguation_events SET chosen=?,resolved=1 WHERE id=?',(chosen,eid))
+   lex=c.execute('SELECT * FROM intent_lexicon WHERE id=?',(chosen,)).fetchone()
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'disambiguation_resolved',json.dumps({'chosen':chosen,'transcript':row['transcript']},ensure_ascii=False),now())); c.commit()
+   return send(self,200,{'ok':True,'action':lex['action'] if lex else None,'label':lex['label'] if lex else chosen})
   if p=='/api/screen-tasks':
    rid=str(uuid.uuid4())
    c.execute('INSERT INTO screen_task_runs VALUES(?,?,?,?,?,?,?,?,?)',(rid,str(d.get('package','')),str(d.get('title','')),str(d.get('status','unknown')),int(d.get('steps_total') or 0),int(d.get('steps_done') or 0),str(d.get('error','')),str(d.get('started_at') or now()),now()))
@@ -442,6 +558,10 @@ class Handler(SimpleHTTPRequestHandler):
    if 'کیف پول' in text or 'موجودی' in text: intent='wallet.balance'; reply='موجودی کیف پول شما آماده بررسی است.'
    elif 'دارو' in text: intent='medication.list_today'; reply='داروهای امروز شما را آماده کردم.'
    elif 'کمک' in text or 'اورژانس' in text: intent='emergency.request_help'; reply='درخواست کمک فوری نیازمند تأیید صوتی شماست.'
-   return send(self,200,{'intent':intent,'spoken_reply':reply,'requires_confirmation':intent.startswith(('wallet','emergency')),'safety':'caution' if intent.startswith(('wallet','emergency')) else 'normal'})
+   conf=d.get('confidence')
+   try: conf=float(conf) if conf is not None else None
+   except Exception: conf=None
+   stuck=(intent=='conversation.general' and not is_smalltalk(text)) or (conf is not None and conf<0.55)
+   return send(self,200,{'intent':intent,'spoken_reply':reply,'requires_confirmation':intent.startswith(('wallet','emergency')),'safety':'caution' if intent.startswith(('wallet','emergency')) else 'normal','needs_clarification':bool(stuck),'candidates':match_candidates(c,text,2) if stuck else [],'confidence':conf})
   return send(self,404,{'error':'not_found'})
 if __name__=='__main__': print('Sepandyar API listening on 0.0.0.0:4174'); ThreadingHTTPServer(('0.0.0.0',4174),Handler).serve_forever()
