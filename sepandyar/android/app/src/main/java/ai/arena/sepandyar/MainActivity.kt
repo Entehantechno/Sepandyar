@@ -28,6 +28,8 @@ class MainActivity : Activity() {
             loadUrl("file:///android_asset/index.html")
         }
         setContentView(web)
+        // نتیجه هر کار کنترل صفحه به رابط وب برمی‌گردد
+        ScreenTaskRunner.onResult = { result -> reportTaskResult(result) }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 40)
         else startListeningService()
@@ -53,6 +55,31 @@ class MainActivity : Activity() {
             ScreenControlService.pendingAction = ScreenAction(action, payload)
             ScreenControlService.instance?.executePendingAction()
         }
+        @JavascriptInterface fun hasOverlayPermission(): Boolean = Settings.canDrawOverlays(this@MainActivity)
+        @JavascriptInterface fun openOverlaySettings() { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }
+        @JavascriptInterface fun accessibilityEnabled(): Boolean = isAccessibilityEnabled()
+        /** اجرای کامل یک کار روی اپ تأییدشده، با پاپ‌آپ شناور و بازگشت خودکار به سپندیار. */
+        @JavascriptInterface fun runScreenTask(planJson: String): Boolean =
+            ScreenTaskRunner.start(this@MainActivity, planJson) { pkg -> launchApprovedPackage(pkg) }
+        @JavascriptInterface fun cancelScreenTask() { ScreenTaskRunner.cancel() }
+        @JavascriptInterface fun bringAppToFront() { runOnUiThread { returnFromOverlay() } }
+    }
+
+    /** نتیجه کار را به جاوااسکریپت داخل WebView برمی‌گرداند. */
+    private fun reportTaskResult(result: ScreenTaskResult) {
+        runOnUiThread {
+            if (!::web.isInitialized) return@runOnUiThread
+            val payload = org.json.JSONObject.quote(result.toJson())
+            web.evaluateJavascript("window.onScreenTaskResult && window.onScreenTaskResult(JSON.parse($payload))", null)
+        }
+    }
+
+    /** بازگرداندن سپندیار به حالت تمام‌صفحه پس از پایان کنترل اپ مقصد. */
+    private fun returnFromOverlay() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        startActivity(intent)
     }
 }
 

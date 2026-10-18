@@ -41,7 +41,9 @@ def db():
  CREATE TABLE IF NOT EXISTS symptom_reports(id TEXT PRIMARY KEY,symptom TEXT,severity TEXT,note TEXT,source TEXT DEFAULT 'self_report',escalated INTEGER DEFAULT 0,created_at TEXT);
  CREATE TABLE IF NOT EXISTS caregiver_actions(id TEXT PRIMARY KEY,kind TEXT,payload TEXT,status TEXT DEFAULT 'pending',requested_by TEXT,requested_at TEXT,delivered_at TEXT,delivered_by TEXT);
  CREATE TABLE IF NOT EXISTS caregiver_sessions(token TEXT PRIMARY KEY,phone TEXT,created_at TEXT,expires_at TEXT);
- CREATE TABLE IF NOT EXISTS safety_rules(id TEXT PRIMARY KEY,level TEXT,pattern TEXT,action TEXT,reply TEXT,updated_at TEXT);''')
+ CREATE TABLE IF NOT EXISTS safety_rules(id TEXT PRIMARY KEY,level TEXT,pattern TEXT,action TEXT,reply TEXT,updated_at TEXT);
+ CREATE TABLE IF NOT EXISTS approved_apps(package TEXT PRIMARY KEY,label TEXT,category TEXT,icon TEXT,plan TEXT,enabled INTEGER DEFAULT 1,updated_at TEXT);
+ CREATE TABLE IF NOT EXISTS screen_task_runs(id TEXT PRIMARY KEY,app_package TEXT,title TEXT,status TEXT,steps_total INTEGER,steps_done INTEGER,error TEXT,started_at TEXT,finished_at TEXT);''')
  defaults=[('systolic','90','140','80','180'),('diastolic','60','90','50','120'),('glucose','70','180','54','300'),('weight','0','1000','0','1000')]
  for t,nmin,nmax,cmin,cmax in defaults: c.execute('INSERT OR IGNORE INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?)',(t,nmin,nmax,cmin,cmax,'system',now()))
  cols=[x[1] for x in c.execute('PRAGMA table_info(transactions)').fetchall()]
@@ -68,6 +70,10 @@ def db():
         ('ambiguous','refer_professional',refer_reply,['دوز دارو','مقدار دارو','دارو را قطع','قرص را قطع','چه بیماری دارم','چه‌ام هست','تداخل دارویی','جایگزین دارو','نسخه بنویس','تجویز کن'])]
  for lvl,act,reply,pats in rules:
   for pat in pats: c.execute('INSERT OR IGNORE INTO safety_rules(id,level,pattern,action,reply,updated_at) VALUES(?,?,?,?,?,?)',(lvl+'::'+pat,lvl,pat,act,reply,now()))
+ apps=[('com.snappfood','اسنپ‌فود','خرید','🛍️',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'جست‌وجو','timeout_ms':9000},{'type':'input_text','payload':'شیر کم‌چرب','timeout_ms':6000},{'type':'tap_text','payload':'افزودن به سبد','timeout_ms':12000},{'type':'tap_text','payload':'سبد خرید','timeout_ms':9000}]),
+       ('cab.snapp.passenger','اسنپ','تاکسی','🚕',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'کجا می‌روید','timeout_ms':9000},{'type':'input_text','payload':'خیابان ولیعصر','timeout_ms':6000},{'type':'tap_text','payload':'درخواست خودرو','timeout_ms':12000}]),
+       ('com.android.chrome','کروم','مرورگر','🌐',[{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'جست‌وجو یا وارد کردن نشانی','timeout_ms':9000},{'type':'input_text','payload':'نوبت پزشک','timeout_ms':6000}])]
+ for pkg,label,cat,icon,steps in apps: c.execute('INSERT OR IGNORE INTO approved_apps VALUES(?,?,?,?,?,?,?)',(pkg,label,cat,icon,json.dumps({'steps':steps},ensure_ascii=False),1,now()))
  c.commit(); return c
 def body(h):
  try: n=int(h.headers.get('Content-Length','0')); return json.loads(h.rfile.read(n) or '{}')
@@ -235,6 +241,14 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/symptoms/catalog': return send(self,200,{'items':rows(c,'SELECT name,escalate FROM symptom_catalog ORDER BY sort_order')})
   if p=='/api/symptoms': return send(self,200,{'items':rows(c,'SELECT * FROM symptom_reports ORDER BY created_at DESC LIMIT 50')})
   if p=='/api/safety/rules': return send(self,200,{'items':rows(c,'SELECT level,pattern,action,reply FROM safety_rules ORDER BY level,pattern')})
+  if p=='/api/apps/approved':
+   items=[]
+   for x in rows(c,'SELECT * FROM approved_apps WHERE enabled=1 ORDER BY category,label'):
+    try: x['plan']=json.loads(x['plan'] or '{}')
+    except Exception: x['plan']={'steps':[]}
+    items.append(x)
+   return send(self,200,{'items':items})
+  if p=='/api/screen-tasks': return send(self,200,{'items':rows(c,'SELECT * FROM screen_task_runs ORDER BY started_at DESC LIMIT 50')})
   if p=='/api/caregiver/actions': return send(self,200,{'items':rows(c,'SELECT * FROM caregiver_actions ORDER BY requested_at DESC LIMIT 50')})
   if p=='/api/caregiver/panel':
    s=caregiver_session(c,self.headers)
@@ -244,7 +258,8 @@ class Handler(SimpleHTTPRequestHandler):
    meds=rows(c,"SELECT m.id,m.name,m.time,COALESCE(l.event,'pending') AS status FROM medications m LEFT JOIN medication_logs l ON l.medication_id=m.id AND l.log_date=? ORDER BY m.time",(today,))
    alerts=rows(c,"SELECT id,type,message,severity,status,created_at FROM alerts WHERE status='open' ORDER BY created_at DESC LIMIT 20")
    vit=c.execute('SELECT type,value,measured_at FROM vitals ORDER BY measured_at DESC LIMIT 1').fetchone()
-   return send(self,200,{'profile':dict(prof) if prof else {},'medications':meds,'open_alerts':alerts,'last_vital':dict(vit) if vit else None,'tasks':rows(c,"SELECT * FROM care_tasks WHERE status!='done' ORDER BY due_at"),'symptoms':rows(c,'SELECT * FROM symptom_reports ORDER BY created_at DESC LIMIT 10'),'pending_actions':[a for a in rows(c,'SELECT * FROM caregiver_actions ORDER BY requested_at DESC LIMIT 50') if a['status']=='pending'],'checked_at':now()})
+   screen=rows(c,'SELECT app_package,title,status,steps_done,steps_total,error,started_at FROM screen_task_runs ORDER BY started_at DESC LIMIT 8') if consent_granted(c,'screen_control') else None
+   return send(self,200,{'profile':dict(prof) if prof else {},'medications':meds,'open_alerts':alerts,'last_vital':dict(vit) if vit else None,'tasks':rows(c,"SELECT * FROM care_tasks WHERE status!='done' ORDER BY due_at"),'symptoms':rows(c,'SELECT * FROM symptom_reports ORDER BY created_at DESC LIMIT 10'),'pending_actions':[a for a in rows(c,'SELECT * FROM caregiver_actions ORDER BY requested_at DESC LIMIT 50') if a['status']=='pending'],'screen_tasks':screen,'screen_control_shared':screen is not None,'checked_at':now()})
   if p=='/api/alerts': return send(self,200,{'items':rows(c,'SELECT * FROM alerts ORDER BY created_at DESC LIMIT 50')})
   if p=='/api/events': return send(self,200,{'items':rows(c,'SELECT * FROM events ORDER BY created_at DESC LIMIT 100')})
   return super().do_GET()
@@ -370,6 +385,11 @@ class Handler(SimpleHTTPRequestHandler):
     resp.update({'alert_id':aid,'action_id':act,'reply':'این علامت را ثبت کردم و فوراً به مراقب شما اطلاع دادم. لطفاً منتظر تماس او باشید.'})
    else: resp['reply']='علامت «'+sym+'» را ثبت کردم و در گزارش مراقب شما قرار دادم.'
    c.commit(); return send(self,201,resp)
+  if p=='/api/screen-tasks':
+   rid=str(uuid.uuid4())
+   c.execute('INSERT INTO screen_task_runs VALUES(?,?,?,?,?,?,?,?,?)',(rid,str(d.get('package','')),str(d.get('title','')),str(d.get('status','unknown')),int(d.get('steps_total') or 0),int(d.get('steps_done') or 0),str(d.get('error','')),str(d.get('started_at') or now()),now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'screen_task_finished',json.dumps({'package':d.get('package'),'status':d.get('status')},ensure_ascii=False),now())); c.commit()
+   return send(self,201,{'id':rid,'ok':True})
   if p=='/api/caregiver/session':
    phone=str(d.get('phone','')).strip()
    if not phone: return send(self,400,{'error':'phone_required'})

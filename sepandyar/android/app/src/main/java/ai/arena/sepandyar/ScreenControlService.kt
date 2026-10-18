@@ -67,4 +67,54 @@ class ScreenControlService : AccessibilityService() {
         val stroke = GestureDescription.StrokeDescription(path, 0, 80)
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
+
+    // ---- اجرای گام‌های برنامه کنترل صفحه (توسط ScreenTaskRunner) ----
+
+    /** یک گام را دقیقاً یک بار اجرا می‌کند؛ تکرار و انتظار بر عهده ScreenTaskRunner است. */
+    fun performStep(step: ScreenStep): Boolean = when (step.type) {
+        "launch", "wait" -> true
+        "tap_text" -> tapOnce(step.payload)
+        "input_text" -> smartInput(step.payload)
+        "tap_xy" -> step.payload.split(',').mapNotNull { it.trim().toFloatOrNull() }
+            .takeIf { it.size == 2 }?.let { tap(it[0], it[1]); true } ?: false
+        "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
+        "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
+        "recents" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+        "scroll" -> scrollRoot(step.payload)
+        else -> false
+    }
+
+    /** آیا متن یا توضیح داده‌شده الان روی صفحه دیده می‌شود؟ برای تأیید انجام گام. */
+    fun isTextVisible(query: String): Boolean {
+        if (query.isBlank()) return true
+        return containsText(rootInActiveWindow, SmartSelector.normalize(query))
+    }
+
+    private fun containsText(node: AccessibilityNodeInfo?, query: String): Boolean {
+        if (node == null) return false
+        val text = SmartSelector.normalize(node.text?.toString())
+        val desc = SmartSelector.normalize(node.contentDescription?.toString())
+        if ((text.isNotBlank() && text.contains(query)) || (desc.isNotBlank() && desc.contains(query))) return true
+        for (i in 0 until node.childCount) node.getChild(i)?.let { if (containsText(it, query)) return true }
+        return false
+    }
+
+    /** یک تلاش برای لمس؛ بدون زمان‌بندی داخلی تا تلاش‌های پشت‌سرهم روی هم تلنبار نشوند. */
+    private fun tapOnce(query: String): Boolean {
+        val target = SmartSelector.find(rootInActiveWindow, query) ?: return false
+        return target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
+
+    private fun scrollRoot(direction: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val action = if (direction == "up") AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        return scrollNode(root, action)
+    }
+
+    private fun scrollNode(node: AccessibilityNodeInfo, action: Int): Boolean {
+        if (node.isScrollable && node.performAction(action)) return true
+        for (i in 0 until node.childCount) node.getChild(i)?.let { if (scrollNode(it, action)) return true }
+        return false
+    }
 }
