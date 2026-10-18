@@ -538,6 +538,20 @@ check("index.html: approved_by محتوای آموزشی escape می‌شود",
 check("index.html: برچسب دکمهٔ علائم escape می‌شود",
       "+esc(x.name)+(x.escalate?" in html)
 
+# --- سه interpolation بی‌رمز دیگر (دفاع در عمق) ---
+# این سه از دادهٔ سرور نمی‌آیند: assistantName و chosen از ورودی/گفتار محلی و
+# spoken از transcript تشخیص گفتار. پس self-XSS‌اند نه XSS راه دور.
+# ولی همان الگوی شکست از attribute را داشتند، پس بسته شدند تا ممیزی کامل بسته بماند.
+# assistant_name در /api/profile ذخیره می‌شود ولی index.html هرگز آن را
+# از پاسخ سرور نمی‌خواند (۰ خواندن، ۱ نوشتن) — پس مسیر راه دور نیست.
+check("index.html: assistantName در value escape می‌شود",
+      "value=\"${esc(localStorage.getItem('assistantName')" in html)
+check("index.html: متن گفته‌شده (spoken) escape می‌شود",
+      "+esc(spoken)+'»" in html)
+check("index.html: نام دستیار انتخاب‌شده (chosen) escape می‌شود",
+      "+esc(chosen)+'»" in html)
+
+
 # --- اثبات سمت سرور: این فیلدها دست‌نخورده ذخیره و برگردانده می‌شوند ---
 # (دفاع در رندر است، نه در ذخیره — پس این انتظارها عمداً «دست‌نخورده» هستند)
 XP='<img src=x onerror="window.__pwn=1">'
