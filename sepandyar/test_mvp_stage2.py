@@ -55,6 +55,7 @@ s,j=req('/api/caregiver/panel'); check('پنل بدون نشست مراقب = 40
 s,j=req('/api/caregiver/session','POST',{'phone':'09129999999'}); check('شماره‌ی دعوت‌نشده = 403',s==403 and j.get('error')=='caregiver_not_invited',(s,j))
 s,j=req('/api/caregiver/session','POST',{}); check('شماره خالی = 400',s==400,(s,j))
 s,j=req('/api/caregivers','POST',{'name':'مراقب مرحله دو','phone':'09128888888','role':'family','permissions':['health']}); check('ثبت مراقب',s==201,(s,j))
+s,j=req('/api/consents','POST',{'scope':'health','granted':False,'confirmed_by_voice':False,'updated_by':'test'}); check('رضایت سلامت برای این تست لغو شد',s==200,(s,j))
 s,j=req('/api/caregiver/session','POST',{'phone':'09128888888'}); check('بدون رضایت سالمند = 403',s==403 and j.get('error')=='senior_consent_not_granted',(s,j))
 s,j=req('/api/consents','POST',{'scope':'health','granted':True,'confirmed_by_voice':True,'updated_by':'senior'}); check('رضایت صوتی سلامت ثبت شد',s==200,(s,j))
 s,j=req('/api/caregiver/session','POST',{'phone':'09128888888'}); check('با رضایت = توکن نشست',s==201 and bool(j.get('token')),(s,j)); tok=j.get('token')
