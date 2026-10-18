@@ -519,6 +519,51 @@ for name,src in [('caregiver.html',cghtml),('admin.html',adhtml)]:
             leaks.append(f.group(1))
     check(name+' الحاق بی‌رمز دادهٔ سرور در innerHTML ندارد',not leaks,leaks[:6])
 
+# --- دو مسیر زنده در caregiver.html که اسکن بالا از قلم می‌انداخت ---
+# اسکن فقط الگوی '+obj.field+' را در innerHTML می‌گرفت. این دو شکل دیگری داشتند:
+#   ۱) pl.body در innerHTML — payload از POST /api/messages (بی‌احراز هویت)
+#      -> caregiver_actions.payload -> /api/caregiver/panel -> actionCard()
+#   ۲) a.id درون onclick="deliverAction('...')" — شکست از بافت JS با '
+# هر دو با jsdom اثبات شدند: <img> در DOM ساخته شد و onclick شکست.
+check("caregiver.html: pl.body پیام سالمند escape می‌شود",
+      "esc((pl.body||''))" in cghtml)
+check("caregiver.html: هیچ a.id خامی در onclick نمانده",
+      "+a.id+" not in cghtml)
+check("caregiver.html: a.id در onclick با jsa محافظت می‌شود",
+      "+jsa(a.id)+" in cghtml)
+
+# --- اثبات سمت سرور: payload پیام دست‌نخورده به پنل مراقب می‌رسد ---
+# payload به‌صورت JSON ذخیره می‌شود، پس " به \\" تبدیل می‌شود و رشتهٔ خام
+# هرگز تطبیق نمی‌کند. قطعه‌ای را می‌سنجیم که از رمزگذاری JSON سالم بیرون می‌آید.
+XP_CG='<img src=x onerror="window.__pwnCG=1">'
+XP_FRAG='<img src=x onerror='          # بدون " — از JSON سالم می‌ماند
+# شمارهٔ یکتا تا تست idempotent بماند (کد دعوت فقط یک‌بار برگردانده می‌شود)
+import time as _tm
+_PH='093%08d'%(_tm.time_ns()%100000000)
+st,d=req(BASE,'/api/caregivers','POST',{'name':'مراقب تست','phone':_PH,'relation':'فرزند'})
+check('ساخت مراقب برای آزمون صف اقدام',st in (200,201) and bool((d or {}).get('invite_code')),(st,d))
+_inv=(d or {}).get('invite_code')
+st,d=req(BASE,'/api/messages','POST',
+         {'contact_id':'c','body':XP_CG,'kind':'voice'})
+check('POST /api/messages بدنهٔ آلوده را می‌پذیرد (بی‌احراز هویت)',st==201,st)
+st,d=req(BASE,'/api/caregiver/session','POST',
+         {'invite_code':_inv,'phone':_PH,'name':'مراقب تست'})
+_tok=(d or {}).get('token')
+check('گرفتن نشست مراقب',st==201 and bool(_tok),(st,d))
+if _tok:
+    # req() هدر سفارشی نمی‌گیرد؛ مانند بخش ۱۲ مستقیم از http.client می‌رویم
+    _u=urlparse(BASE)
+    _conn=http.client.HTTPConnection(_u.hostname,_u.port,timeout=30)
+    _conn.request('GET','/api/caregiver/panel',headers={'X-Caregiver-Token':_tok})
+    _r=_conn.getresponse(); _raw=_r.read(); _st=_r.status; _conn.close()
+    check('پنل مراقب با توکن ۲۰۰ می‌دهد',_st==200,_st)
+    try: _panel=json.loads(_raw or b'{}')
+    except Exception: _panel={}
+    _acts=_panel.get('pending_actions',[])
+    check('payload آلوده دست‌نخورده در صف مراقب است (دفاع در رندر)',
+          any(XP_FRAG in str(a.get('payload','')) for a in _acts), len(_acts))
+
+
 # --- سه مسیر XSS زنده در index.html که اسکن بالا از قلم می‌انداخت ---
 # اسکن قبلی فقط caregiver.html و admin.html را می‌گشت و فقط الگوی
 #   '+obj.field+'  را می‌گرفت. این سه مسیر شکل دیگری داشتند:
