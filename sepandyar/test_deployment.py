@@ -577,6 +577,73 @@ st,d=req(BASE,'/api/symptoms','POST',{'symptom':{'nested':'x'}})
 check('تور ایمنی مرزی خطای اتصال نوع را ۴۰۰ می‌کند',st in (201,400),st)
 
 print()
+print('--- 13) دسترس‌پذیری رابط کاربری سالمند ---')
+# ممیزی پیش از اصلاح (بر پایهٔ پژوهش WCAG 2.2 + راهنمای سالمند):
+#   سوییچ «متن بزرگ» کار نمی‌کرد — ۴۸ قاعده از ۴۹ قاعدهٔ font-size با px مطلق
+#   بودند و body.large-text{font-size:18px} فقط روی em/rem اثر دارد. ضمن اینکه
+#   rem نسبت به <html> است نه <body>، پس تارگت سوییچ هم غلط بود.
+#   ۳۸ رخداد متن زیر ۱۶px، چهار کنتراست زیر ۴٫۵:۱، هدف لمسی ۴۳px.
+import re as _re3
+def _lum(h):
+    h=h.lstrip('#')
+    if len(h)==3: h=''.join(c*2 for c in h)
+    r,g,b=[int(h[i:i+2],16)/255 for i in (0,2,4)]
+    f=lambda c: c/12.92 if c<=0.03928 else ((c+0.055)/1.055)**2.4
+    return 0.2126*f(r)+0.7152*f(g)+0.0722*f(b)
+def _ratio(a,b):
+    l1,l2=sorted([_lum(a),_lum(b)],reverse=True); return (l1+0.05)/(l2+0.05)
+
+uicss=_re3.search(r'<style>(.*?)</style>',html,_re3.S).group(1)
+
+# ۱) ریشهٔ rem روی <html> — شرط لازم برای کار کردن مقیاس
+check('ریشهٔ font-size روی <html> تنظیم شده','html{font-size:16px}' in uicss)
+
+# ۲) هیچ font-size مطلق بیرون از قواعد ریشه نمانده باشد
+root_rules=_re3.findall(r'html(?:\[data-textscale="\w+"\])?\{font-size:\d+px\}',html)
+all_px=_re3.findall(r'font-size:\s*[\d.]+px',html)
+check('همهٔ font-size ها rem شده‌اند (جز قواعد ریشه)',
+      len(all_px)==len(root_rules),f'{len(all_px)} px در برابر {len(root_rules)} قاعدهٔ ریشه')
+
+# ۳) کف ۱۶px در مقیاس پیش‌فرض
+rems=[float(x) for x in _re3.findall(r'font-size:\s*([\d.]+)rem',uicss)]
+check('کف اندازهٔ متن در مقیاس پیش‌فرض ≥ ۱۶px',rems and min(rems)*16>=15.9,f'کوچک‌ترین: {min(rems)*16:.1f}px')
+
+# ۴) WCAG 1.4.4 — متن باید تا ۲۰۰٪ بزرگ شود
+steps=dict(_re3.findall(r'html\[data-textscale="(\w+)"\]\{font-size:(\d+)px\}',html))
+check('پلهٔ ۲۰۰٪ برای بزرگ‌نمایی متن وجود دارد (WCAG 1.4.4)',
+      any(int(v)>=32 for v in steps.values()),steps)
+
+# ۵) کنتراست همهٔ جفت‌های رنگ/پس‌زمینه در CSS
+rootvars=dict(_re3.findall(r'--([\w\-]+):\s*(#[0-9a-fA-F]{3,6})',uicss))
+def _res(v):
+    m=_re3.match(r'var\(--([\w\-]+)\)',v or '')
+    return rootvars.get(m.group(1)) if m else v
+lowc=[]
+for m in _re3.finditer(r'([^{}]+)\{([^}]*)\}',uicss):
+    d=m.group(2)
+    fg=_re3.search(r'(?<![-\w])color:\s*(#[0-9a-fA-F]{3,6}|var\(--[\w\-]+\))',d)
+    bg=_re3.search(r'background:\s*(#[0-9a-fA-F]{3,6}|var\(--[\w\-]+\))',d)
+    if not(fg and bg): continue
+    f,b=_res(fg.group(1)),_res(bg.group(1))
+    if f and b and _ratio(f,b)<4.5: lowc.append((m.group(1).strip()[-24:],round(_ratio(f,b),2)))
+check('کنتراست همهٔ متن‌ها ≥ ۴٫۵:۱ (WCAG AA)',not lowc,lowc[:5])
+
+# ۶) اهداف لمسی
+for sel in ('.icon-btn{','.pill{'):
+    mm=_re3.search(_re3.escape(sel)+r'[^}]*\}',uicss)
+    w=int(_re3.search(r'width:\s*(\d+)px',mm.group(0)).group(1))
+    check(f'هدف لمسی {sel.strip("{")} ≥ ۴۸px',w>=48,w)
+
+# ۷) سوییچ کنتراست واقعاً کلاس را ست می‌کند (پیش‌تر برچسب وعده می‌داد ولی کد نه)
+check('سوییچ highContrast کلاس high-contrast را ست می‌کند',
+      "if(key==='highContrast')document.body.classList.toggle('high-contrast',on)" in html)
+check('ارجاع مرده به toggleSetting(largeText) نمانده',"toggleSetting('largeText')" not in html)
+
+# ۸) وزیرمتن در هر سه داشبورد (خوانایی فارسی)
+for name,src in [('index.html',html),('caregiver.html',cghtml),('admin.html',adhtml)]:
+    check(name+' فونت وزیرمتن دارد','Vazirmatn' in src and '@import' in src)
+
+print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
 if failures:
     print('شکست‌ها:'); [print(' -',f) for f in failures]
