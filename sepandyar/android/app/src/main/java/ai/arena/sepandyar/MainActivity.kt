@@ -39,6 +39,25 @@ class MainActivity : Activity() {
             webViewClient = object : WebViewClientCompat() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                     assetLoader.shouldInterceptRequest(request.url)
+
+                // سیاست ناوبری. addJavascriptInterface روی خودِ WebView ثبت می‌شود و با هر
+                // ناوبری باقی می‌ماند؛ پس اگر صفحه به مبدأ بیگانه برود، آن مبدأ به همهٔ
+                // ۱۶ متد بومی AppBridge دسترسی می‌گیرد (از جمله saveServerUrl که ماندگار
+                // است و runScreenTask که کنترل صفحه را در دست می‌گیرد). فقط مبدأ
+                // دارایی‌های خودِ اپ مجاز است.
+                // توجه: این فقط ناوبری قاب اصلی را می‌گیرد؛ زیرمنابع مانند
+                // <link> فونت از shouldInterceptRequest می‌گذرند و دست‌نخورده می‌مانند.
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    val url = request.url ?: return true
+                    if (url.scheme.equals("tel", ignoreCase = true)) {
+                        // تماس را به dialer سیستم می‌سپاریم؛ کاربر آنجا تأیید می‌کند
+                        startActivity(Intent(Intent.ACTION_DIAL, url))
+                        return true
+                    }
+                    val sameOrigin = url.scheme.equals("https", ignoreCase = true) &&
+                        url.host == WebViewAssetLoader.DEFAULT_DOMAIN
+                    return !sameOrigin   // true یعنی ناوبری انجام نشود
+                }
             }
             addJavascriptInterface(AppBridge(), "SepandyarNative")
             loadUrl("https://" + WebViewAssetLoader.DEFAULT_DOMAIN + "/assets/index.html")
@@ -62,7 +81,19 @@ class MainActivity : Activity() {
         @JavascriptInterface fun setAssistantName(name: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("name", name).apply() }
         // آدرس سرور سپندیار؛ لایه وب در نخستین اجرا آن را می‌خواند و در localStorage هم نگه می‌دارد
         @JavascriptInterface fun getServerUrl(): String = getSharedPreferences("assistant", MODE_PRIVATE).getString("server_url", "") ?: ""
-        @JavascriptInterface fun saveServerUrl(url: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("server_url", url.trim()).apply() }
+        // فقط https روی میزبان معتبر پذیرفته می‌شود. این متد ماندگار است: یک مقدار
+        // بد، اپ را برای همیشه به سرور مهاجم برمی‌گرداند و چون لایهٔ وب آن را در
+        // نخستین اجرا می‌خواند، هیچ بازنشانی آشکاری هم ندارد.
+        @JavascriptInterface fun saveServerUrl(url: String) {
+            val candidate = url.trim()
+            if (candidate.isEmpty()) return
+            val parsed = Uri.parse(candidate)
+            val schemeOk = parsed.scheme.equals("https", ignoreCase = true)
+            val host = parsed.host
+            val hostOk = !host.isNullOrBlank() && host.contains('.') && !host.contains(' ')
+            if (!schemeOk || !hostOk) return
+            getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("server_url", candidate).apply()
+        }
         @JavascriptInterface fun saveVoiceProfile(samples: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("voice_samples", samples).putLong("voice_enrolled_at", System.currentTimeMillis()).apply() }
         @JavascriptInterface fun callCaregiver(phone: String) { if (phone.isNotBlank()) startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))) }
         @JavascriptInterface fun tvCommand(command: String): Boolean { return TvCommandRouter.execute(this@MainActivity, command) }

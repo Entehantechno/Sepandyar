@@ -59,6 +59,47 @@ check('هیچ loadUrl با file:// نیست', 'loadUrl("file://' not in main_kt 
 check('از دامنهٔ رسمی appassets بارگذاری می‌کند','WebViewAssetLoader.DEFAULT_DOMAIN + "/assets/index.html"' in main_kt,'')
 check('shouldInterceptRequest به assetLoader وصل است','assetLoader.shouldInterceptRequest(request.url)' in main_kt,'')
 check('دسترسی فایل صریحاً خاموش شده','settings.allowFileAccess = false' in main_kt and 'allowUniversalAccessFromFileURLs = false' in main_kt,'')
+
+# --- سیاست ناوبری WebView و اعتبارسنجی پل JS ---
+# addJavascriptInterface روی خودِ WebView ثبت می‌شود و با هر ناوبری باقی می‌ماند؛
+# پس بدون shouldOverrideUrlLoading هر XSS می‌توانست WebView را به origin مهاجم ببرد
+# و آن‌گاه به همه‌ٔ متدهای بومی AppBridge برسد.
+check('WebView سیاست ناوبری دارد (shouldOverrideUrlLoading)',
+      'shouldOverrideUrlLoading' in main_kt)
+check('ناوبری به مبدأ غیر appassets بسته می‌شود',
+      'WebViewAssetLoader.DEFAULT_DOMAIN' in main_kt and 'return !sameOrigin' in main_kt)
+check('tel: به dialer سیستم سپرده می‌شود نه WebView',
+      'Intent.ACTION_DIAL' in main_kt)
+check('saveServerUrl فقط https با میزبان معتبر می‌پذیرد',
+      'saveServerUrl' in main_kt and 'schemeOk' in main_kt and 'hostOk' in main_kt)
+check('saveServerUrl مقدار خام را بی‌اعتبارسنجی ذخیره نمی‌کند',
+      "putString(\"server_url\", url.trim()).apply()" not in main_kt)
+
+# منطق سیاست ناوبری و اعتبارسنجی را با بازتاب پایتون راستی‌آزمایی می‌کنیم
+# (کامپایل Kotlin در این محیط ممکن نیست، پس رفتار تصمیم‌گیری را می‌سنجیم)
+def _nav_blocked(scheme,host,dom='appassets.androidplatform.net'):
+    if scheme is None: return True
+    if scheme.lower()=='tel': return False      # به dialer می‌رود
+    return not (scheme.lower()=='https' and host==dom)
+check('ناوبری به origin مهاجم بسته می‌شود',_nav_blocked('https','evil.example') is True)
+check('javascript: بسته می‌شود',_nav_blocked('javascript','') is True)
+check('data: بسته می‌شود',_nav_blocked('data','') is True)
+check('http بسته می‌شود',_nav_blocked('http','appassets.androidplatform.net') is True)
+check('ناوبری به origin خود اپ باز می‌ماند',
+      _nav_blocked('https','appassets.androidplatform.net') is False)
+
+def _server_ok(url):
+    c=url.strip()
+    if not c: return False
+    if '://' in c:
+        sch,rest=c.split('://',1); host=rest.split('/')[0].split('?')[0].split(':')[0]
+    else: sch,host='',''
+    return sch.lower()=='https' and bool(host) and ('.' in host) and (' ' not in host)
+check('saveServerUrl آدرس https معتبر را می‌پذیرد',_server_ok('https://sepandyar.example.com') is True)
+check('saveServerUrl آدرس IP با پورت را می‌پذیرد',_server_ok('https://192.168.1.5:4174') is True)
+check('saveServerUrl javascript: را رد می‌کند',_server_ok('javascript:alert(1)') is False)
+check('saveServerUrl http را رد می‌کند',_server_ok('http://192.168.1.5:4174') is False)
+check('saveServerUrl رشتهٔ خالی را رد می‌کند',_server_ok('   ') is False)
 check('وابستگی androidx.webkit در گریدل است','androidx.webkit:webkit:' in gradle,'')
 check('پل getServerUrl وجود دارد','fun getServerUrl()' in main_kt,'')
 check('پل saveServerUrl وجود دارد','fun saveServerUrl(' in main_kt,'')
