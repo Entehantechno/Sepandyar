@@ -519,6 +519,51 @@ for name,src in [('caregiver.html',cghtml),('admin.html',adhtml)]:
             leaks.append(f.group(1))
     check(name+' الحاق بی‌رمز دادهٔ سرور در innerHTML ندارد',not leaks,leaks[:6])
 
+# --- سه مسیر XSS زنده در index.html که اسکن بالا از قلم می‌انداخت ---
+# اسکن قبلی فقط caregiver.html و admin.html را می‌گشت و فقط الگوی
+#   '+obj.field+'  را می‌گرفت. این سه مسیر شکل دیگری داشتند:
+#   ۱) الحاق متغیر ساده:      '+n+'        (n از localStorage <- /api/profile)
+#   ۲) شکست از attribute:     value="'+d?.full_name+'   (درون value="...")
+#   ۳) الحاق بی‌رمز در میان متن escape‌شده:  esc(it.body) ... (it.approved_by||'—')
+# هر سه با دادهٔ سرور از راه اندپوینت بی‌احراز هویت قابل نوشتن بودند.
+check("index.html: سلام با esc(n) رندر می‌شود نه n خام",
+      "w.innerHTML='سلام، <span>'+esc(n)+'</span>" in html)
+check("index.html: full_name کارت اضطراری escape می‌شود",
+      "esc(d?.full_name||localStorage.getItem('seniorName')||'')" in html)
+for _f in ('birth_date','blood_type','allergies'):
+    check('index.html: '+_f+' کارت اضطراری escape می‌شود',
+          ("esc(d?.%s||'')"%_f) in html)
+check("index.html: approved_by محتوای آموزشی escape می‌شود",
+      "esc(it.approved_by||'—')" in html)
+check("index.html: برچسب دکمهٔ علائم escape می‌شود",
+      "+esc(x.name)+(x.escalate?" in html)
+
+# --- اثبات سمت سرور: این فیلدها دست‌نخورده ذخیره و برگردانده می‌شوند ---
+# (دفاع در رندر است، نه در ذخیره — پس این انتظارها عمداً «دست‌نخورده» هستند)
+XP='<img src=x onerror="window.__pwn=1">'
+st,_=req(BASE,'/api/profile','POST',{'name':XP})
+check('POST /api/profile نام آلوده را می‌پذیرد',st==200,st)
+st,d=req(BASE,'/api/profile')
+check('GET /api/profile آن را دست‌نخورده برمی‌گرداند',d.get('name')==XP,d.get('name'))
+
+st,_=req(BASE,'/api/emergency-card','POST',
+         {'full_name':XP,'birth_date':'1340','blood_type':'O+'})
+check('POST /api/emergency-card نام آلوده را می‌پذیرد',st==200,st)
+st,d=req(BASE,'/api/emergency-card')
+check('GET /api/emergency-card آن را دست‌نخورده برمی‌گرداند',
+      d.get('full_name')==XP,d.get('full_name'))
+
+st,d=req(BASE,'/api/education','POST',
+         {'topic':'t','body':XP,'category':'عمومی'})
+check('POST /api/education محتوای آلوده را می‌پذیرد',st==201,st)
+_eid=d.get('id')
+st,d=req(BASE,'/api/education/%s/approve'%_eid,'POST',{'approved_by':XP})
+check('approve با approved_by آلوده پذیرفته می‌شود',st==200,st)
+st,d=req(BASE,'/api/education')
+_row=[x for x in d.get('items',[]) if x.get('id')==_eid]
+check('approved_by دست‌نخورده ذخیره شده',
+      bool(_row) and _row[0].get('approved_by')==XP, _row[:1])
+
 print()
 print('--- 12) ورودی نامعتبر باید ۴۰۰ بدهد نه ۵۰۰ ---')
 # سه طبقهٔ ریشه‌ای که فازر پیدا کرد (۳۹ نقطهٔ سقوط در مجموع):
