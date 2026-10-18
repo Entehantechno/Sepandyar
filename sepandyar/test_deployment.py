@@ -20,6 +20,16 @@ def check(name,cond,detail=''):
     print(('✅' if cond else '❌'),name,('' if cond else '-> '+str(detail)))
     if not cond: failures.append(name)
 
+def req_raw(base,path,raw_bytes,method='POST'):
+ """بدنهٔ خام می‌فرستد. برای payload هایی که json.dumps پایتون خودش نمی‌تواند
+ encode کند (مثل سورگیت جفت‌نشده)؛ حملهٔ واقعی هم به شکل escape در متن JSON است."""
+ u=urlparse(base)
+ conn=http.client.HTTPConnection(u.hostname,u.port,timeout=60)
+ conn.request(method,path,body=raw_bytes,headers={'Content-Type':'application/json'})
+ r=conn.getresponse(); raw=r.read(); code=r.status; conn.close()
+ try: return code,json.loads(raw or b'{}')
+ except Exception: return code,{'_raw':(raw or b'').decode('utf-8','replace')}
+
 def req(base,path,method='GET',data=None):
     u=urlparse(base)
     b=json.dumps(data,ensure_ascii=False).encode() if data is not None else None
@@ -508,6 +518,63 @@ for name,src in [('caregiver.html',cghtml),('admin.html',adhtml)]:
         for f in _re2.finditer(r"'\s*\+\s*([A-Za-z_$][\w$]*\.[\w$]+)\s*\+\s*'",seg):
             leaks.append(f.group(1))
     check(name+' الحاق بی‌رمز دادهٔ سرور در innerHTML ندارد',not leaks,leaks[:6])
+
+print()
+print('--- 12) ورودی نامعتبر باید ۴۰۰ بدهد نه ۵۰۰ ---')
+# سه طبقهٔ ریشه‌ای که فازر پیدا کرد (۳۹ نقطهٔ سقوط در مجموع):
+#   ۱) مقدار ساخت‌یافته در جای مقدار ساده -> sqlite3.ProgrammingError
+#      «Error binding parameter 2: type 'dict' is not supported»
+#   ۲) سورگیت جفت‌نشده (\ud800) -> UnicodeEncodeError؛ json.loads آن را می‌پذیرد
+#      ولی sqlite نمی‌تواند UTF-8 کند
+#   ۳) float()/int() برهنه روی دادهٔ درخواست -> ValueError/TypeError
+# هیچ‌کدام نباید ۵۰۰ شوند: این‌ها خطای کلاینت‌اند.
+NUMERIC=[
+ ('/api/reminder-settings','max_nudges',{}),
+ ('/api/icope','score',{'domain':'vision'}),
+ ('/api/appointments','reminder_minutes',{}),
+ ('/api/medications/x/details','remaining',{}),
+ ('/api/medications/x/details','refill_threshold',{}),
+ ('/api/medications/x/refill','amount',{}),
+ ('/api/vitals/share','expires_days',{}),
+ ('/api/disambiguate','limit',{'transcript':'قرص'}),
+ ('/api/screen-tasks','steps_total',{}),
+ ('/api/screen-tasks','steps_done',{}),
+]
+BADNUM=[('رشتهٔ غیرعددی','abc'),('رشتهٔ خالی',''),('آرایه',[1]),('شیء',{'a':1})]
+bad500=[]
+for path,key,base in NUMERIC:
+    for cn,val in BADNUM:
+        b=dict(base); b[key]=val
+        st,_=req(BASE,path,'POST',b)
+        if st==500: bad500.append((path,key,cn))
+check('هیچ تبدیل عددی روی ورودی نامعتبر ۵۰۰ نمی‌دهد',not bad500,bad500[:6])
+
+# کلاس ۱: مقدار ساخت‌یافته در فیلد متنی
+STRUCT=[('/api/contacts','name'),('/api/medications','name'),('/api/caregivers','name')]
+bad500=[]
+for path,key in STRUCT:
+    for val in ({'a':1},[1,2]):
+        st,_=req(BASE,path,'POST',{'name':val,'phone':'09137000009'})
+        if st==500: bad500.append((path,key,type(val).__name__))
+check('مقدار ساخت‌یافته در فیلد متنی ۵۰۰ نمی‌دهد',not bad500,bad500[:6])
+st,d=req(BASE,'/api/contacts','POST',{'name':{'a':1},'phone':'09137000010'})
+check('مقدار ساخت‌یافته ۴۰۰ می‌دهد نه ۲۰۱',st==400,st)
+
+# کلاس ۲: سورگیت جفت‌نشده — باید ذخیره شود ولی به U+FFFD نرمال شود
+# \ud800 به‌صورت escape شش‌نویسه‌ای در متن JSON — همان شکلی که کلاینت می‌فرستد
+st,d=req_raw(BASE,'/api/contacts',
+ b'{"name":"\u0639\u0644\u06cc\\ud800\u0631\u0636\u0627","phone":"09137000011"}')
+check('سورگیت جفت‌نشده ۵۰۰ نمی‌دهد',st==201,st)
+if st==201:
+    st2,d2=req(BASE,'/api/contacts')
+    names=[x.get('name') for x in d2.get('items',[])]
+    check('سورگیت به U+FFFD نرمال شده و ذخیره می‌شود',
+          any('\ufffd' in (n or '') and '\ud800' not in (n or '') for n in names),
+          [n for n in names if n and 'علی' in n][:3])
+
+# تور ایمنی مرزی: خطای اتصال نوع باید ۴۰۰ باشد
+st,d=req(BASE,'/api/symptoms','POST',{'symptom':{'nested':'x'}})
+check('تور ایمنی مرزی خطای اتصال نوع را ۴۰۰ می‌کند',st in (201,400),st)
 
 print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))

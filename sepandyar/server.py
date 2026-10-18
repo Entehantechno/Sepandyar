@@ -141,6 +141,19 @@ def db(h=None):
   ('kermani','سی','برای','لهجه کرمانی'),('kermani','میرم','می‌روم','لهجه کرمانی')]
  for i,(acc,var,can,note) in enumerate(dia): c.execute('INSERT OR IGNORE INTO dialect_lexicon VALUES(?,?,?,?,?)',('dl%d'%i,acc,var,can,note))
  c.commit(); return c
+_SURR=re.compile(r'[\ud800-\udfff]')
+def desurrogate(v):
+ """سورگیت جفت‌نشده را با U+FFFD جایگزین می‌کند.
+
+ json.loads یک \ud800 تنها را می‌پذیرد (JSON اجازهٔ escape نیم‌جفت را می‌دهد)،
+ ولی پایگاه‌داده نمی‌تواند آن را UTF-8 کند؛ نتیجه UnicodeEncodeError و ۵۰۰ بود.
+ اینجا گلوگاه مشترک همهٔ اندپوینت‌هاست، پس یک بار و برای همه بسته می‌شود.
+ """
+ if isinstance(v,str): return _SURR.sub('\ufffd',v)
+ if isinstance(v,dict): return {(desurrogate(k) if isinstance(k,str) else k):desurrogate(x) for k,x in v.items()}
+ if isinstance(v,list): return [desurrogate(x) for x in v]
+ return v
+
 def body(h):
  """بدنهٔ JSON را می‌خواند. خطای تجزیه را روی خود نمونهٔ handler علامت می‌زند
 (نه یک متغیر سراسری) تا در سرور نخی بین درخواست‌ها نشت نکند."""
@@ -154,7 +167,7 @@ def body(h):
    # وگرنه d.get() روی آن‌ها AttributeError می‌دهد
    h._body_error=True
    return {}
-  return v
+  return desurrogate(v)
  except Exception:
   h._body_error=True
   return {}
@@ -232,6 +245,13 @@ def as_float(v):
  # فیلد غایب یا غیرعددی باید 400 بدهد؛ float(None) پیش‌تر 500 می‌داد
  try: return float(v)
  except Exception: return None
+
+def as_text(v,default=''):
+ # مقدار ساخت‌یافته هرگز نباید به sqlite برود: «type 'dict' is not supported»
+ # پیش‌تر ۵۰۰ می‌داد. مثل as_int/as_float، ورودی نامعتبر None می‌دهد تا فراخوان ۴۰۰ برگرداند.
+ if v is None: return default
+ if isinstance(v,(dict,list)): return None
+ return str(v)
 
 def idem_key(h,d):
  # کلید تکرارناپذیری فقط وقتی معنا دارد که کلاینت آن را بفرستد.
@@ -622,6 +642,15 @@ class Handler(SimpleHTTPRequestHandler):
   # پوشش کامل: بخشی از زنجیرهٔ مسیرها بیرون از try داخلی است و هر خطای نوع/تبدیل
   # در آن‌جا پیش‌تر اتصال را بی‌پاسخ می‌بست (RemoteDisconnected)
   try: return self._post()
+  except sqlite3.ProgrammingError as e:
+   # «Error binding parameter N: type 'dict' is not supported» یعنی کلاینت مقدار
+   # ساخت‌یافته فرستاده جایی که مقدار ساده لازم است؛ این خطای ۴۰۰ است نه ۵۰۰.
+   # فقط خطای اتصال نوع نگاشت می‌شود تا باگ واقعی (مثل تعداد غلط پارامتر) پنهان نماند.
+   if 'Error binding parameter' in str(e):
+    try: return send(self,400,{'error':'invalid_field_type','message':'مقدار این فیلد باید ساده باشد (رشته/عدد)، نه شیء یا آرایه.'})
+    except Exception: return None
+   try: return send(self,500,{'error':'server_error'})
+   except Exception: return None
   except Exception:
    try: return send(self,500,{'error':'server_error'})
    except Exception: return None
@@ -648,10 +677,13 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/proactive/respond':
    eid=d.get('id'); c.execute('UPDATE proactive_events SET response=?,responded_at=? WHERE id=?',(d.get('response',''),now(),eid)); c.commit(); return send(self,200,{'ok':True})
   if p=='/api/reminder-settings':
-   c.execute('INSERT INTO reminder_settings(id,quiet_start,quiet_end,max_nudges,preferred_channel,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,max_nudges=excluded.max_nudges,preferred_channel=excluded.preferred_channel,updated_at=excluded.updated_at',(d.get('quiet_start','22:00'),d.get('quiet_end','07:00'),int(d.get('max_nudges',2)),d.get('preferred_channel','voice'),now())); c.commit(); return send(self,200,{'ok':True})
+   nudges=as_int(d.get('max_nudges',2))
+   if nudges is None: return send(self,400,{'error':'invalid_max_nudges','message':'max_nudges باید عدد باشد.'})
+   c.execute('INSERT INTO reminder_settings(id,quiet_start,quiet_end,max_nudges,preferred_channel,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,max_nudges=excluded.max_nudges,preferred_channel=excluded.preferred_channel,updated_at=excluded.updated_at',(d.get('quiet_start','22:00'),d.get('quiet_end','07:00'),nudges,d.get('preferred_channel','voice'),now())); c.commit(); return send(self,200,{'ok':True})
   if p=='/api/icope':
-   domain=d.get('domain',''); score=float(d.get('score',0));
-   if domain not in ('locomotion','vitality','vision','hearing','cognition','psychology') or not 0<=score<=10: return send(self,400,{'error':'invalid_icope_assessment'})
+   domain=d.get('domain',''); score=as_float(d.get('score',0))
+   # as_float روی ورودی غیرعددی None می‌دهد؛ 0<=None پیش‌تر TypeError و ۵۰۰ می‌داد
+   if score is None or domain not in ('locomotion','vitality','vision','hearing','cognition','psychology') or not 0<=score<=10: return send(self,400,{'error':'invalid_icope_assessment'})
    status='good' if score>=7 else ('watch' if score>=4 else 'needs_support'); iid=str(uuid.uuid4()); c.execute('INSERT INTO icope_assessments VALUES(?,?,?,?,?,?,?)',(iid,domain,score,status,d.get('notes',''),d.get('assessed_by','senior'),now()));
    if status=='needs_support': c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(str(uuid.uuid4()),'icope_'+domain,'در حوزه '+domain+' نیاز به حمایت بیشتر ثبت شد.','warning','open',now()))
    c.commit(); return send(self,201,{'id':iid,'status':status,'ok':True})
@@ -674,7 +706,9 @@ class Handler(SimpleHTTPRequestHandler):
    aid=str(uuid.uuid4()); provider=d.get('provider',''); location=d.get('location',''); doctor_id=d.get('doctor_id');
    if doctor_id:
     doc=c.execute('SELECT * FROM doctors WHERE id=?',(doctor_id,)).fetchone(); provider=doc['name'] if doc else provider; location=(doc['clinic']+' — '+doc['address']) if doc and doc['clinic'] else d.get('location','')
-   c.execute('INSERT INTO appointments VALUES(?,?,?,?,?,?,?,?)',(aid,d.get('title','وقت پزشک'),provider,location,d.get('starts_at',''),int(d.get('reminder_minutes',60)), 'scheduled',now())); c.commit(); return send(self,201,{'id':aid,'ok':True,'provider':provider,'location':location})
+   rmin=as_int(d.get('reminder_minutes',60))
+   if rmin is None: return send(self,400,{'error':'invalid_reminder_minutes','message':'reminder_minutes باید عدد باشد.'})
+   c.execute('INSERT INTO appointments VALUES(?,?,?,?,?,?,?,?)',(aid,d.get('title','وقت پزشک'),provider,location,d.get('starts_at',''),rmin, 'scheduled',now())); c.commit(); return send(self,201,{'id':aid,'ok':True,'provider':provider,'location':location})
   if p=='/api/doctors':
    did=str(uuid.uuid4()); c.execute('INSERT INTO doctors VALUES(?,?,?,?,?,?,?,?)',(did,d.get('name',''),d.get('specialty',''),d.get('phone',''),d.get('address',''),d.get('clinic',''),int(bool(d.get('preferred'))),now())); c.commit(); return send(self,201,{'id':did,'ok':True})
   if p=='/api/emergency-card':
@@ -719,15 +753,21 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/medications':
    mid=str(uuid.uuid4()); c.execute('INSERT INTO medications VALUES(?,?,?,?,?)',(mid,d.get('name',''),d.get('time',''),d.get('instructions',''),'pending')); c.commit(); return send(self,201,{'id':mid,'ok':True})
   if p.startswith('/api/medications/') and p.endswith('/details'):
-   mid=p.split('/')[3]; c.execute('INSERT INTO medication_details(medication_id,purpose,remaining,refill_threshold,unit,warnings,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(medication_id) DO UPDATE SET purpose=excluded.purpose,remaining=excluded.remaining,refill_threshold=excluded.refill_threshold,unit=excluded.unit,warnings=excluded.warnings,updated_at=excluded.updated_at',(mid,d.get('purpose',''),float(d.get('remaining',0)),float(d.get('refill_threshold',5)),d.get('unit','عدد'),d.get('warnings',''),now())); c.commit(); return send(self,200,{'ok':True})
+   rem=as_float(d.get('remaining',0)); thr=as_float(d.get('refill_threshold',5))
+   if rem is None or thr is None: return send(self,400,{'error':'invalid_medication_quantity','message':'remaining و refill_threshold باید عدد باشند.'})
+   mid=p.split('/')[3]; c.execute('INSERT INTO medication_details(medication_id,purpose,remaining,refill_threshold,unit,warnings,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(medication_id) DO UPDATE SET purpose=excluded.purpose,remaining=excluded.remaining,refill_threshold=excluded.refill_threshold,unit=excluded.unit,warnings=excluded.warnings,updated_at=excluded.updated_at',(mid,d.get('purpose',''),rem,thr,d.get('unit','عدد'),d.get('warnings',''),now())); c.commit(); return send(self,200,{'ok':True})
   if p.startswith('/api/medications/') and p.endswith('/refill'):
-   mid=p.split('/')[3]; amount=float(d.get('amount',0)); c.execute('UPDATE medication_details SET remaining=remaining+?,updated_at=? WHERE medication_id=?',(amount,now(),mid)); c.commit(); return send(self,200,{'ok':True})
+   amount=as_float(d.get('amount',0))
+   if amount is None: return send(self,400,{'error':'invalid_amount','message':'amount باید عدد باشد.'})
+   mid=p.split('/')[3]; c.execute('UPDATE medication_details SET remaining=remaining+?,updated_at=? WHERE medication_id=?',(amount,now(),mid)); c.commit(); return send(self,200,{'ok':True})
   if p.startswith('/api/medications/') and p.endswith('/event'):
    mid=p.split('/')[3]; status=d.get('event','pending'); today=datetime.datetime.now().date().isoformat(); c.execute('UPDATE medications SET status=? WHERE id=?',(status,mid)); c.execute('INSERT OR REPLACE INTO medication_logs(id,medication_id,log_date,event,created_at) VALUES(?,?,?,?,?)',(str(uuid.uuid4()),mid,today,status,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'medication_'+status,json.dumps({'medication_id':mid,'log_date':today},ensure_ascii=False),now())); c.commit(); return send(self,200,{'ok':True,'status':status,'log_date':today})
   if p=='/api/vitals/share/revoke':
    token=d.get('token',''); c.execute('UPDATE shares SET revoked=1 WHERE token=?',(token,)); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vitals_share_revoked',json.dumps({'token':token},ensure_ascii=False),now())); c.commit(); return send(self,200,{'ok':True})
   if p=='/api/vitals/share':
-   days=max(1,min(int(d.get('expires_days',7)),30)); token=uuid.uuid4().hex; expires=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=days)).isoformat(); c.execute('INSERT INTO shares VALUES(?,?,?,?,?)',(token,d.get('scope','vitals'),expires,0,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vitals_share_created',json.dumps({'expires_at':expires},ensure_ascii=False),now())); c.commit(); return send(self,201,{'token':token,'url':f'/share/{token}','expires_at':expires})
+   edays=as_int(d.get('expires_days',7))
+   if edays is None: return send(self,400,{'error':'invalid_expires_days','message':'expires_days باید عدد باشد.'})
+   days=max(1,min(edays,30)); token=uuid.uuid4().hex; expires=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=days)).isoformat(); c.execute('INSERT INTO shares VALUES(?,?,?,?,?)',(token,d.get('scope','vitals'),expires,0,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vitals_share_created',json.dumps({'expires_at':expires},ensure_ascii=False),now())); c.commit(); return send(self,201,{'token':token,'url':f'/share/{token}','expires_at':expires})
   if p=='/api/vitals/thresholds':
    for item in d.get('items',[]):
     c.execute('INSERT INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(type) DO UPDATE SET normal_min=excluded.normal_min,normal_max=excluded.normal_max,critical_min=excluded.critical_min,critical_max=excluded.critical_max,updated_by=excluded.updated_by,updated_at=excluded.updated_at',(item.get('type'),str(item.get('normal_min')),str(item.get('normal_max')),str(item.get('critical_min')),str(item.get('critical_max')),d.get('updated_by','caregiver'),now()))
@@ -820,7 +860,9 @@ class Handler(SimpleHTTPRequestHandler):
    text=str(d.get('text','')); conf=d.get('confidence')
    try: conf=float(conf) if conf is not None else None
    except Exception: conf=None
-   limit=min(max(int(d.get('limit') or 2),2),3)
+   _lim=as_int(d.get('limit') or 2)
+   if _lim is None: return send(self,400,{'error':'invalid_limit','message':'limit باید عدد باشد.'})
+   limit=min(max(_lim,2),3)
    prof=get_voice_profile(c,str(d.get('profile') or 'default'))
    cands=match_candidates(c,text,limit,prof['dialect'],prof['secondary_dialect'],str(d.get('profile') or 'default'))
    if len(cands)<2:
@@ -850,7 +892,12 @@ class Handler(SimpleHTTPRequestHandler):
    return send(self,200,{'ok':True,'action':lex['action'] if lex else None,'label':lex['label'] if lex else chosen,'learned':learned,'aliases':c.execute('SELECT COUNT(*) FROM utterance_aliases').fetchone()[0]})
   if p=='/api/screen-tasks':
    rid=str(uuid.uuid4())
-   c.execute('INSERT INTO screen_task_runs VALUES(?,?,?,?,?,?,?,?,?)',(rid,str(d.get('package','')),str(d.get('title','')),str(d.get('status','unknown')),int(d.get('steps_total') or 0),int(d.get('steps_done') or 0),str(d.get('error','')),str(d.get('started_at') or now()),now()))
+   st_tot=as_int(d.get('steps_total') or 0); st_done=as_int(d.get('steps_done') or 0)
+   if st_tot is None or st_done is None: return send(self,400,{'error':'invalid_steps','message':'steps_total و steps_done باید عدد باشند.'})
+   # as_text نه str(): str({'a':1}) بی‌صدا «{'a': 1}» را به‌عنوان متن ذخیره می‌کرد
+   _flds=[as_text(d.get(k,'')) for k in ('package','title','status','error')]
+   if any(f is None for f in _flds): return send(self,400,{'error':'invalid_field_type','message':'مقدار این فیلد باید ساده باشد (رشته/عدد)، نه شیء یا آرایه.'})
+   c.execute('INSERT INTO screen_task_runs VALUES(?,?,?,?,?,?,?,?,?)',(rid,_flds[0],_flds[1],_flds[2],st_tot,st_done,_flds[3],str(d.get('started_at') or now()),now()))
    c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'screen_task_finished',json.dumps({'package':d.get('package'),'status':d.get('status')},ensure_ascii=False),now())); c.commit()
    return send(self,201,{'id':rid,'ok':True})
   if p=='/api/caregiver/session':
