@@ -643,6 +643,21 @@ check('ارجاع مرده به toggleSetting(largeText) نمانده',"toggleSe
 for name,src in [('index.html',html),('caregiver.html',cghtml),('admin.html',adhtml)]:
     check(name+' فونت وزیرمتن دارد','Vazirmatn' in src and '@import' in src)
 
+# ۹) سرریز: ظرف با ارتفاع ثابت که فونت بزرگ‌شده در آن جا نمی‌شود.
+# این باگ را خودِ بالا بردن کف فونت ساخت: .transcript ارتفاع ۲۰px ثابت داشت
+# و فونتش ۱۶px شد، در حالی که متن به ~۲۴px نیاز دارد. آن ناحیه aria-live است
+# و متن گفتهٔ کاربر در آن می‌نشیند، پس باید رشد کند نه اینکه بریده شود.
+overflow=[]
+for m in _re3.finditer(r'([^{}]+)\{([^}]*)\}',uicss):
+    d=m.group(2)
+    h=_re3.search(r'(?<![-\w])height:\s*(\d+)px',d)
+    fs=_re3.search(r'font-size:\s*([\d.]+)rem',d)
+    if not(h and fs): continue
+    px=float(fs.group(1))*16
+    if float(h.group(1)) < px*1.5:
+        overflow.append((m.group(1).strip()[-22:],h.group(1)+'px',f'{px:.0f}px فونت'))
+check('هیچ ظرف با ارتفاع ثابت، متن بزرگ‌شده را نمی‌بُرد',not overflow,overflow[:5])
+
 print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
 if failures:
