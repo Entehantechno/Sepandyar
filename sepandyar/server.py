@@ -195,6 +195,39 @@ def get_voice_profile(c,pid='default'):
  r=c.execute('SELECT * FROM voice_profiles WHERE id=?',(pid,)).fetchone()
  if r: return dict(r)
  return {'id':pid,'name':'کاربر','dialect':'standard','secondary_dialect':'','patience_ms':DEFAULT_PATIENCE_MS,'confidence_floor':0.55,'calibrated':0,'updated_at':None}
+# ---- موتور گفت‌وگوی زنده (Live) — برگزیده از پژوهش docs/RESEARCH_LIVE_VOICE_AI_FA.md ----
+LIVE_TOKEN_URL='https://generativelanguage.googleapis.com/v1beta/auth_tokens'
+LIVE_WS_BASE='wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained'
+LIVE_MODEL='gemini-3.8-live'
+LIVE_VOICE='Kore'
+LIVE_MIN_SILENCE_MS=800    # گوگل: کمتر از ۵۰۰–۸۰۰ms جمله را وسط مکث طبیعی می‌شکند
+LIVE_MAX_SILENCE_MS=5000   # هم‌سقف با patience_ms مرحلهٔ ۵
+LIVE_TOKENS_LIMIT=25000    # آستانهٔ فشرده‌سازی بافت؛ بدون آن توکن صوتی انباشته هر دور دوباره صورتحساب می‌شود
+def live_vad_config(patience_ms):
+ """صبر گفتاری کاربر (patience_ms) را به تنظیم VAD لایه Live نگاشت می‌کند."""
+ try: pat=int(patience_ms)
+ except Exception: pat=DEFAULT_PATIENCE_MS
+ pat=max(LIVE_MIN_SILENCE_MS,min(LIVE_MAX_SILENCE_MS,pat))
+ return {'disabled':False,'startOfSpeechSensitivity':'START_SENSITIVITY_LOW','endOfSpeechSensitivity':'END_SENSITIVITY_LOW','prefixPaddingMs':120,'silenceDurationMs':pat}
+def live_token_payload(model=LIVE_MODEL):
+ """بدنهٔ درخواست توکن موقت گوگل؛ مدل و مودالیته را در خود توکن قفل می‌کند."""
+ exp=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=30)).replace(microsecond=0).isoformat().replace('+00:00','Z')
+ return {'uses':1,'expireTime':exp,'liveConnectConstraints':{'model':'models/'+str(model),'config':{'sessionResumption':{},'responseModalities':['AUDIO']}}}
+def fetch_live_token(key,model=LIVE_MODEL):
+ """توکن موقت را از گوگل می‌گیرد؛ نام توکن را برمی‌گرداند و در صورت خطا None."""
+ try:
+  r=ureq.Request(LIVE_TOKEN_URL,data=json.dumps(live_token_payload(model),ensure_ascii=False).encode(),headers={'x-goog-api-key':str(key),'Content-Type':'application/json'},method='POST')
+  with ureq.urlopen(r,timeout=15) as resp: return str((json.loads(resp.read()) or {}).get('name') or '') or None
+ except Exception: return None
+def live_system_prompt(c):
+ """دستور سامانهٔ فارسی: قید آواشناسی تهرانی + رد صریح دری/عربی + جملهٔ کوتاه."""
+ cfg=c.execute('SELECT system_prompt,tone,guardrails FROM ai_config WHERE id=1').fetchone()
+ base=(cfg['system_prompt'] if cfg and cfg['system_prompt'] else 'تو دستیار فارسی سالمندان هستی.')
+ tone=(cfg['tone'] if cfg and cfg['tone'] else 'گرم، آرام، کوتاه و غیرکودکانه')
+ guard=(cfg['guardrails'] if cfg and cfg['guardrails'] else '')
+ phon='همیشه به فارسی معیار ایران و با تلفظ تهرانی صحبت کن: ح را «ه» بگو، ق و غ را «غ» فارسی، ط را «ت»، ص و ث را «س»، ض و ظ و ذ را «ز». هرگز با لهجهٔ دری افغانی یا عربی صحبت نکن.'
+ style='جمله‌ها کوتاه و با واژه‌های آشنا باشند. از واژهٔ تخصصی و پیچیده پرهیز کن. شمرده و آرام حرف بزن. اگر کاربر وسط جمله مکث کرد، صبر کن و حرفش را قطع نکن.'
+ return '\n'.join(x for x in (base,'لحن: '+tone,phon,style,('قواعد ایمنی: '+guard) if guard else '') if x)
 def normalize_dialect(c,text,dialect=None,secondary=None):
  """واژه‌های گویشی و محاوره‌ای را به فارسی معیار نگاشت می‌کند؛ فهرست قواعد اعمال‌شده را هم برمی‌گرداند.
 
@@ -420,6 +453,22 @@ class Handler(SimpleHTTPRequestHandler):
     r=ureq.Request('https://api.openai.com/v1/realtime/client_secrets',data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','OpenAI-Safety-Identifier':hashlib.sha256(b'sepandyar-local-user').hexdigest()},method='POST')
     with ureq.urlopen(r,timeout=15) as resp: return send(self,200,json.loads(resp.read()))
    except Exception as e: return send(self,502,{'error':'realtime_provider_error','message':'اتصال realtime برقرار نشد.'})
+  if p=='/api/live/session':
+   key=os.getenv('GEMINI_API_KEY','')
+   if not key: return send(self,503,{'error':'live_not_configured','provider':'none','message':'GEMINI_API_KEY در محیط سرور ثبت نشده است.'})
+   pid=parse_qs(urlparse(self.path).query).get('id',['default'])[0]
+   prof=get_voice_profile(c,pid)
+   cfg=c.execute('SELECT * FROM ai_config WHERE id=1').fetchone()
+   voice=(cfg['voice_id'] if cfg and cfg['voice_id'] else LIVE_VOICE)
+   name=fetch_live_token(key,LIVE_MODEL)
+   if not name: return send(self,502,{'error':'live_provider_error','provider':'none','message':'دریافت توکن گفت‌وگوی زنده ناموفق بود.'})
+   vad=live_vad_config(prof['patience_ms'])
+   return send(self,200,{'provider':'gemini','token':name,'ws_url':LIVE_WS_BASE+'?access_token='+quote(name,safe=''),'model':'models/'+LIVE_MODEL,
+    'generation_config':{'responseModalities':['AUDIO'],'speechConfig':{'voiceConfig':{'prebuiltVoiceConfig':{'voiceName':voice}}}},
+    'realtime_input_config':{'automaticActivityDetection':vad},
+    'context_window_compression':{'slidingWindow':{},'compressTriggerConfig':{'tokensLimit':LIVE_TOKENS_LIMIT}},
+    'system_instruction':live_system_prompt(c),'voice':voice,'patience_ms':vad['silenceDurationMs'],'profile':pid,
+    'guardrail_endpoint':'/api/conversation','expires_at':live_token_payload(LIVE_MODEL)['expireTime']})
   if p=='/api/education/topics': return send(self,200,{'items':rows(c,"SELECT id,topic,category,approved_by FROM education_content WHERE status='approved' ORDER BY category,topic")})
   if p=='/api/education/next':
    it=rows(c,"SELECT id,topic,category,body,approved_by FROM education_content WHERE status='approved' ORDER BY RANDOM() LIMIT 1"); return send(self,200,{'item':it[0] if it else None})
