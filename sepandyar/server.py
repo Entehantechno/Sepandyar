@@ -6,8 +6,11 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, quote, parse_qs
 ROOT=os.path.dirname(__file__); DB=os.path.join(ROOT,'sepandyar.db')
 def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat()
-def db():
- c=sqlite3.connect(DB); c.row_factory=sqlite3.Row
+def db(h=None):
+ # اتصال روی هندلر ثبت می‌شود تا در پایان درخواست بسته شود؛
+ # وگرنه خطای وسط تراکنش، قفل نوشتن را رها می‌کند و کل پایگاه‌داده قفل می‌شود
+ c=sqlite3.connect(DB,timeout=15); c.row_factory=sqlite3.Row
+ if h is not None: h._db=c
  c.executescript('''CREATE TABLE IF NOT EXISTS profile(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT,age INTEGER,needs TEXT,assistant_name TEXT,updated_at TEXT);
  CREATE TABLE IF NOT EXISTS caregivers(id TEXT PRIMARY KEY,name TEXT,phone TEXT,role TEXT,permissions TEXT,created_at TEXT);
  CREATE TABLE IF NOT EXISTS wallet(id INTEGER PRIMARY KEY CHECK(id=1),balance INTEGER NOT NULL DEFAULT 0,currency TEXT NOT NULL DEFAULT 'IRR');
@@ -126,8 +129,22 @@ def db():
  for i,(acc,var,can,note) in enumerate(dia): c.execute('INSERT OR IGNORE INTO dialect_lexicon VALUES(?,?,?,?,?)',('dl%d'%i,acc,var,can,note))
  c.commit(); return c
 def body(h):
- try: n=int(h.headers.get('Content-Length','0')); return json.loads(h.rfile.read(n) or '{}')
- except: return {}
+ """بدنهٔ JSON را می‌خواند. خطای تجزیه را روی خود نمونهٔ handler علامت می‌زند
+(نه یک متغیر سراسری) تا در سرور نخی بین درخواست‌ها نشت نکند."""
+ h._body_error=False
+ try:
+  n=int(h.headers.get('Content-Length','0')); raw=h.rfile.read(n)
+  if not raw or not raw.strip(): return {}
+  v=json.loads(raw)
+  if not isinstance(v,dict):
+   # [] و null و "x" هم JSON معتبرند، ولی بدنهٔ این API باید شیء باشد؛
+   # وگرنه d.get() روی آن‌ها AttributeError می‌دهد
+   h._body_error=True
+   return {}
+  return v
+ except Exception:
+  h._body_error=True
+  return {}
 def send(h,code,obj):
  raw=json.dumps(obj,ensure_ascii=False).encode(); h.send_response(code); h.send_header('Content-Type','application/json; charset=utf-8'); h.send_header('Content-Length',str(len(raw))); h.send_header('Access-Control-Allow-Origin','*'); h.end_headers(); h.wfile.write(raw)
 def rows(c,sql,args=()): return [dict(x) for x in c.execute(sql,args).fetchall()]
@@ -193,6 +210,17 @@ def is_smalltalk(t):
 # ---- لایه گویش و لهجه (بر پایه بنچمارک PSRB: بدترین دقت فارسی روی لهجه مشهدی و یزدی) ----
 DEFAULT_PATIENCE_MS=1800   # پژوهش: آستانه ۱۵۰۰ms برای تماس‌های سلامت/سالمند توصیه شده؛ مکث میان جمله در دهه هشتاد زندگی ۵٫۴ برابر است
 OBJ_SUFFIXES=('مو','رو','شو','و')
+def as_int(v,default=0):
+ # ورودی نامعتبر باید ۴۰۰ بدهد نه ۵۰۰؛ None و رشتهٔ غیرعددی هم شامل می‌شود
+ try: return int(float(v))
+ except Exception: return None
+
+def idem_key(h,d):
+ # کلید تکرارناپذیری فقط وقتی معنا دارد که کلاینت آن را بفرستد.
+ # کلید مشتق از بدنه، دو تراکنش یکسانِ ولی جدا را یکی می‌کرد و شارژ دوم را بی‌صدا می‌بلعید.
+ k=h.headers.get('Idempotency-Key') or d.get('idempotency_key')
+ return str(k) if k else 'auto-'+str(uuid.uuid4())
+
 def get_voice_profile(c,pid='default'):
  r=c.execute('SELECT * FROM voice_profiles WHERE id=?',(pid,)).fetchone()
  if r: return dict(r)
@@ -394,10 +422,24 @@ def caregiver_session(c,headers):
 def primary_caregiver(c):
  r=c.execute('SELECT * FROM caregivers ORDER BY created_at LIMIT 1').fetchone(); return dict(r) if r else None
 class Handler(SimpleHTTPRequestHandler):
- def __init__(self,*a,**kw): super().__init__(*a,directory=ROOT,**kw)
+ def __init__(self,*a,**kw):
+  self._db=None
+  try: super().__init__(*a,directory=ROOT,**kw)
+  finally:
+   c=self._db
+   if c is not None:
+    try: c.rollback()
+    except Exception: pass
+    try: c.close()
+    except Exception: pass
  def do_OPTIONS(self): self.send_response(204); self.send_header('Access-Control-Allow-Origin','*'); self.send_header('Access-Control-Allow-Headers','Content-Type,Idempotency-Key,X-Caregiver-Token'); self.send_header('Access-Control-Allow-Methods','GET,POST,PUT,OPTIONS'); self.end_headers()
  def do_GET(self):
-  p=urlparse(self.path).path; c=db()
+  try: return self._get()
+  except Exception:
+   try: return send(self,500,{'error':'server_error'})
+   except Exception: return None
+ def _get(self):
+  p=urlparse(self.path).path; c=db(self)
   if p.startswith('/share/'):
    token=p.split('/')[-1]; data=share_payload(c,token)
    if not data: self.send_error(404,'share_not_found'); return
@@ -541,7 +583,18 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/events': return send(self,200,{'items':rows(c,'SELECT * FROM events ORDER BY created_at DESC LIMIT 100')})
   return super().do_GET()
  def do_POST(self):
-  p=urlparse(self.path).path; d=body(self); c=db()
+  # پوشش کامل: بخشی از زنجیرهٔ مسیرها بیرون از try داخلی است و هر خطای نوع/تبدیل
+  # در آن‌جا پیش‌تر اتصال را بی‌پاسخ می‌بست (RemoteDisconnected)
+  try: return self._post()
+  except Exception:
+   try: return send(self,500,{'error':'server_error'})
+   except Exception: return None
+ def _post(self):
+  p=urlparse(self.path).path; d=body(self)
+  # بدنهٔ ناقص/خراب هرگز نباید به‌صورت «درخواست خالی معتبر» تفسیر شود،
+  # وگرنه مثلاً پروفایل کالیبره‌شدهٔ کاربر بی‌صدا بازنویسی می‌شود.
+  if getattr(self,'_body_error',False): return send(self,400,{'error':'invalid_json','message':'بدنهٔ درخواست JSON معتبر نیست؛ هیچ تغییری اعمال نشد.'})
+  c=db(self)
   if p=='/api/consents':
    scope=d.get('scope','');
    if scope not in ('health','wallet','screen_control','voice_profile','emergency_call'): return send(self,400,{'error':'invalid_scope'})
@@ -630,13 +683,18 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/alerts':
    aid=str(uuid.uuid4()); c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(aid,d.get('type','general'),d.get('message',''),d.get('severity','normal'),'open',now())); c.commit(); return send(self,201,{'id':aid,'ok':True})
   if p=='/api/wallet/topups':
-   amount=int(d.get('amount',0)); key=self.headers.get('Idempotency-Key') or d.get('idempotency_key') or hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest()
+   amount=as_int(d.get('amount',0)); key=idem_key(self,d)
+   if amount is None: return send(self,400,{'error':'invalid_amount','message':'مبلغ باید عدد باشد.'})
    old=c.execute('SELECT * FROM transactions WHERE idempotency_key=?',(key,)).fetchone()
    if old: return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':old['id']})
    if amount<=0 or amount>100000000: return send(self,400,{'error':'invalid_amount'})
    tid=str(uuid.uuid4()); c.execute('UPDATE wallet SET balance=balance+? WHERE id=1',(amount,)); c.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',(tid,'topup',amount,d.get('description','شارژ کیف پول'),now(),key)); c.commit(); return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':tid})
   if p=='/api/wallet/payment':
-   amount=int(d.get('amount',0)); w=c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance']; key=self.headers.get('Idempotency-Key') or d.get('idempotency_key') or hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest()
+   amount=as_int(d.get('amount',0)); key=idem_key(self,d)
+   if amount is None: return send(self,400,{'error':'invalid_amount','message':'مبلغ باید عدد باشد.'})
+   old=c.execute('SELECT * FROM transactions WHERE idempotency_key=?',(key,)).fetchone()
+   if old: return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':old['id'],'replayed':True})
+   w=c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance']
    if amount<=0 or amount>w: return send(self,409,{'status':'insufficient_funds','balance':w})
    tid=str(uuid.uuid4()); c.execute('UPDATE wallet SET balance=balance-? WHERE id=1',(amount,)); c.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',(tid,'payment',-amount,d.get('description','پرداخت'),now(),key)); c.commit(); return send(self,200,{'status':'succeeded','transaction_id':tid,'balance':w-amount})
   if p=='/api/events':
@@ -664,14 +722,23 @@ class Handler(SimpleHTTPRequestHandler):
    c.commit(); return send(self,201,resp)
   if p=='/api/voice-profile':
    pid=str(d.get('id') or 'default')
+   old=get_voice_profile(c,pid)
    pat=d.get('patience_ms'); floor=d.get('confidence_floor')
-   try: pat=int(pat) if pat is not None else DEFAULT_PATIENCE_MS
+   # به‌روزرسانی جزئی نباید کالیبراسیون یا لهجهٔ اعلام‌شدهٔ کاربر را پاک کند
+   try: pat=max(400,min(int(pat),5000)) if pat is not None else old['patience_ms']
+   except Exception: pat=old['patience_ms']
+   try: floor=max(0.05,min(float(floor),0.95)) if floor is not None else old['confidence_floor']
+   except Exception: floor=old['confidence_floor']
+   try: pat=max(400,min(int(pat),5000))
    except Exception: pat=DEFAULT_PATIENCE_MS
-   try: floor=float(floor) if floor is not None else 0.55
+   try: floor=max(0.05,min(float(floor),0.95))
    except Exception: floor=0.55
-   pat=max(400,min(pat,5000)); floor=max(0.05,min(floor,0.95))
-   c.execute('INSERT OR REPLACE INTO voice_profiles VALUES(?,?,?,?,?,?,?,?)',(pid,str(d.get('name') or 'کاربر'),str(d.get('dialect') or 'standard'),str(d.get('secondary_dialect') or ''),pat,floor,1 if d.get('calibrated') else 0,now()))
-   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'voice_profile_set',json.dumps({'dialect':d.get('dialect'),'patience_ms':pat},ensure_ascii=False),now())); c.commit()
+   name=str(d.get('name') or old['name'] or 'کاربر')
+   dial=str(d.get('dialect') or old['dialect'] or 'standard')
+   sec=str(d.get('secondary_dialect') if d.get('secondary_dialect') is not None else (old['secondary_dialect'] or ''))
+   cal=1 if (d['calibrated'] if 'calibrated' in d else old['calibrated']) else 0
+   c.execute('INSERT OR REPLACE INTO voice_profiles VALUES(?,?,?,?,?,?,?,?)',(pid,name,dial,sec,pat,floor,cal,now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'voice_profile_set',json.dumps({'dialect':dial,'patience_ms':pat},ensure_ascii=False),now())); c.commit()
    return send(self,200,get_voice_profile(c,pid))
   if p=='/api/calibration':
    """کالیبراسیون کوتاه هنگام راه‌اندازی: کاربر چند عبارت کوتاه می‌خواند؛ اطمینان‌ها سنجیده و صبر و آستانه تنظیم می‌شود."""

@@ -34,6 +34,7 @@ main_kt=open(os.path.join(ROOT,'android/app/src/main/java/ai/arena/sepandyar/Mai
 gradle=open(os.path.join(ROOT,'android/app/build.gradle.kts'),encoding='utf-8').read()
 html=open(os.path.join(ROOT,'index.html'),encoding='utf-8').read()
 sw=open(os.path.join(ROOT,'sw.js'),encoding='utf-8').read()
+srvsrc=open(os.path.join(ROOT,'server.py'),encoding='utf-8').read()
 
 print('--- 1) مجوزهای شبکه در مانیفست ---')
 check('مجوز INTERNET اعلام شده','android.permission.INTERNET' in manifest,'')
@@ -133,10 +134,12 @@ try:
     m.ureq.urlopen=orig
     check('realtime/session 200 است',st==200,(st,js))
     check('یک درخواست به OpenAI زده شد',len(calls)==1,calls)
+    _sp,_prof=req('http://127.0.0.1:%d'%port,'/api/voice-profile?id=default')
+    _pat=_prof.get('patience_ms')
     td=calls[0]['body']['session']['audio']['input']['turn_detection']
     check('دیگر semantic_vad نیست',td.get('type')!='semantic_vad',td)
     check('server_vad استفاده می‌شود',td.get('type')=='server_vad',td)
-    check('silence_duration_ms برابر patience است',td.get('silence_duration_ms')==1800,td)
+    check('silence_duration_ms برابر patience پروفایل است',td.get('silence_duration_ms') == (_pat if _pat is not None else 1800),(td.get('silence_duration_ms'),_pat))
     check('دستور سامانه رد دری را دارد','دری' in calls[0]['body']['session']['instructions'],'')
     check('کلاینت دیگر turn_detection را بازنویسی نمی‌کند',"turn_detection:{type:'semantic_vad'}" not in html,'')
     check('کلاینت پروفایل را به realtime/session می‌فرستد',"/api/realtime/session?id=" in html,'')
@@ -152,6 +155,119 @@ for path,needle in [('/index.html','tryLiveVoice'),('/sw.js','sepandyar-v2'),('/
     check('GET '+path+' 200 است',st==200,st)
     text=body.get('_raw') or json.dumps(body,ensure_ascii=False)
     check('GET '+path+' محتوا دارد',needle in text,text[:80])
+
+print()
+print('--- 8) پایداری در برابر بدنهٔ خراب و تکرار درخواست ---')
+# چهار باگ واقعی که در این مرحله پیدا شد:
+#  الف) بدنهٔ JSON خراب {} تلقی می‌شد و پروفایل گویش را از نو می‌نوشت (از دست رفتن داده)
+#  ب) کلید idempotency پرداخت هرگز جست‌وجو نمی‌شد -> تراکنش تکراری، کرش UNIQUE
+#  ج) اتصالِ رهاشدهٔ وسط تراکنش، قفل نوشتن را نگه می‌داشت -> کل API می‌مرد
+#  د) [] و null و "x" از try بیرون خطا می‌دادند و اتصال بی‌پاسخ بسته می‌شد
+
+def raw(path,payload,headers=None,hdr=None):
+    """بدنهٔ خام می‌فرستد؛ اگر اتصال بی‌پاسخ بسته شود None برمی‌گرداند."""
+    u=urlparse(BASE)
+    conn=http.client.HTTPConnection(u.hostname,u.port,timeout=30)
+    h={'Content-Type':'application/json'}
+    if hdr: h.update(hdr)
+    try:
+        conn.request('POST',path,body=payload,headers=h)
+        r=conn.getresponse(); b=r.read(); st=r.status
+        conn.close()
+        try: return st,json.loads(b or b'{}')
+        except Exception: return st,{'_raw':(b or b'').decode('utf-8','replace')}
+    except Exception as e:
+        try: conn.close()
+        except Exception: pass
+        return None,{'_err':type(e).__name__}
+
+# --- الف) بدنهٔ خراب باید 400 بدهد، نه 200 ---
+for bad in [b'{', b'{"a":', b'\xff\xfe', b'not json at all']:
+    st,body=raw('/api/voice-profile',bad)
+    check('بدنهٔ خراب %r روی voice-profile -> 400'%(bad[:12],),st==400,st)
+    check('بدنهٔ خراب %r کد invalid_json دارد'%(bad[:12],),body.get('error')=='invalid_json',body)
+
+st,body=raw('/api/conversation',b'{')
+check('بدنهٔ خراب روی conversation -> 400',st==400,st)
+st,body=raw('/api/conversation',json.dumps({'text':'سلام'},ensure_ascii=False).encode('utf-8'))
+check('بدنهٔ سالم روی conversation -> 200',st==200,st)
+
+# --- ب) بدنهٔ غیر شیء (JSON معتبر ولی نامناسب) ---
+for bad,label in [(b'[]','آرایه'),(b'null','null'),(b'"x"','رشته'),(b'42','عدد')]:
+    st,body=raw('/api/voice-profile',bad)
+    check('بدنهٔ %s -> 400 (نه اتصال قطع‌شده)'%label,st==400,st)
+
+# --- پ) از دست نرفتن پروفایل ---
+req(BASE,'/api/voice-profile','POST',{'id':'default','name':'کاربر اصلی','dialect':'shirazi',
+    'patience_ms':2600,'confidence_floor':0.6,'calibrated':True})
+raw('/api/voice-profile',b'{')
+st,prof=req(BASE,'/api/voice-profile?id=default')
+check('پس از بدنهٔ خراب، لهجهٔ پروفایل حفظ شده',prof.get('dialect')=='shirazi',prof)
+check('پس از بدنهٔ خراب، patience حفظ شده',prof.get('patience_ms')==2600,prof)
+check('پس از بدنهٔ خراب، calibrated حفظ شده',bool(prof.get('calibrated')),prof)
+# به‌روزرسانی جزئی هم نباید لهجه را پاک کند
+req(BASE,'/api/voice-profile','POST',{'id':'default','patience_ms':3000})
+st,prof=req(BASE,'/api/voice-profile?id=default')
+check('به‌روزرسانی جزئی، لهجه را پاک نمی‌کند',prof.get('dialect')=='shirazi',prof)
+check('به‌روزرسانی جزئی، patience را عوض می‌کند',prof.get('patience_ms')==3000,prof)
+
+# --- ت) idempotency کیف پول ---
+st,before=req(BASE,'/api/wallet')
+bal0=before['balance']
+k='regress-pay-'+str(os.getpid())
+st,a=req(BASE,'/api/wallet/payment','POST',{'amount':15000,'description':'رگرسیون'})
+check('پرداخت اول 200 است',st==200,st)
+st,b=req(BASE,'/api/wallet/payment','POST',{'amount':15000,'description':'رگرسیون'},)
+st2,a2=raw('/api/wallet/payment',json.dumps({'amount':15000,'description':'رگرسیون'}).encode(),hdr={'Idempotency-Key':k})
+st3,b2=raw('/api/wallet/payment',json.dumps({'amount':15000,'description':'رگرسیون'}).encode(),hdr={'Idempotency-Key':k})
+check('تکرار کلید پرداخت، 200 می‌دهد (نه 500)',st3==200,st3)
+check('تکرار کلید پرداخت نشان replayed دارد',b2.get('replayed') is True,b2)
+check('تکرار کلید پرداخت، همان تراکنش را برمی‌گرداند',b2.get('transaction_id')==a2.get('transaction_id'),(a2,b2))
+st,w=req(BASE,'/api/wallet')
+check('تکرار کلید پرداخت، موجودی را دوبار کم نمی‌کند',w['balance']==a2['balance'],(a2['balance'],w['balance']))
+# دو شارژ یکسانِ جدا باید هر دو اعمال شوند
+st,t1=req(BASE,'/api/wallet/topups','POST',{'amount':40000})
+st,t2=req(BASE,'/api/wallet/topups','POST',{'amount':40000})
+check('دو شارژ یکسانِ جدا، دو تراکنش می‌سازند',t1['transaction_id']!=t2['transaction_id'],(t1,t2))
+check('دو شارژ یکسانِ جا، هر دو به موجودی اضافه می‌شوند',t2['balance']==t1['balance']+40000,(t1,t2))
+# مبلغ نامعتبر -> 400 نه 500
+st,inv=raw('/api/wallet/topups',b'{"amount":"abc"}')
+check('مبلغ غیرعددی -> 400',st==400,st)
+check('مبلغ غیرعددی کد invalid_amount دارد',inv.get('error')=='invalid_amount',inv)
+
+# --- ث) سرور پس از همهٔ این‌ها زنده و پایگاه‌داده باز است ---
+alive=[]
+for ep in ['/api/wallet','/api/dialects','/api/medications','/api/profile','/api/voice-profile?id=default']:
+    st,_=req(BASE,ep)
+    alive.append((ep,st))
+check('پس از بدنه‌های خراب، همهٔ اندپوینت‌ها 200اند',[s for _,s in alive]==[200]*len(alive),alive)
+# قفل نوشتن رهاشده نباید باقی بماند
+import sqlite3 as _sq
+try:
+    _c=_sq.connect(os.path.join(ROOT,'sepandyar.db'),timeout=3); _c.execute('BEGIN IMMEDIATE'); _c.rollback(); _c.close()
+    locked=False
+except Exception as e:
+    locked=True
+check('قفل نوشتن رهاشده روی پایگاه‌داده نمانده',not locked,'database is locked')
+
+# --- ج) کلاینت: کلید تکرارناپذیری و صف آفلاین ---
+check('queueOffline کلید Idempotency-Key می‌سازد',
+      "o.headers['Idempotency-Key']=idemId()" in html)
+check('صف آفلاین شناسهٔ یکتا برای هر آیتم می‌سازد',"q.push({id:idemId()" in html)
+check('همگام‌سازی صف، قفل بازورودی دارد','if(flushingQueue)return;' in html.replace(' ',''))
+check('همگام‌سازی صف ادغام می‌کند نه بازنویسی','failed.concat(added)' in html)
+check('درخواست‌های تازهٔ حین همگام‌سازی دور ریخته نمی‌شوند','const added=readQueue().filter' in html)
+check('سرور کلید تکرارناپذیری پرداخت را جست‌وجو می‌کند',
+      "if p=='/api/wallet/payment':" in srvsrc and 'FROM transactions WHERE idempotency_key=?' in srvsrc)
+check('کلید مشتق از بدنه حذف شده (شارژهای یکسان را یکی نمی‌کرد)',
+      "hashlib.sha256(json.dumps(d,sort_keys=True)" not in srvsrc)
+check('اتصال پایگاه‌داده در پایان درخواست بسته می‌شود','try: c.close()' in srvsrc)
+check('do_POST کامل در try پیچیده شده','def _post(self):' in srvsrc)
+check('do_GET کامل در try پیچیده شده','def _get(self):' in srvsrc)
+
+# بازگردانی پروفایل به حالت پیش‌فرض تا اجرای بعدی این سوئیت همان نتیجه را بدهد
+req(BASE,'/api/voice-profile','POST',{'id':'default','name':'کاربر','dialect':'standard',
+    'secondary_dialect':'','patience_ms':1800,'confidence_floor':0.55,'calibrated':False})
 
 print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
