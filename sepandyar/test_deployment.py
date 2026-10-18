@@ -270,6 +270,88 @@ req(BASE,'/api/voice-profile','POST',{'id':'default','name':'کاربر','dialec
     'secondary_dialect':'','patience_ms':1800,'confidence_floor':0.55,'calibrated':False})
 
 print()
+print('--- 9) احراز هویت مراقب/ادمین ---')
+# باگ‌های امنیتی که در مرحلهٔ ۹ پیدا شد:
+#  الف) POST /api/caregiver/session فقط شماره می‌خواست -> هرکس با دو درخواست
+#       (خواندن شماره‌ها از GET /api/caregivers، سپس ورود با همان شماره)
+#       توکن ۷ روزهٔ دسترسی کامل می‌گرفت
+#  ب) /api/admin/* هیچ احراز هویتی نداشت -> بازنویسی دستور سیستمی AI با یک POST
+#  ج) GET /api/safety/rules مجموعهٔ گاردریل را لو می‌داد (کمک به دور زدن)
+import time as _t
+PH='091%08d'%(_t.time_ns()%100000000)   # شمارهٔ یکتا در هر اجرا
+st,d=req(BASE,'/api/caregivers','POST',{'name':'مراقب امنیت','phone':PH,'role':'family'})
+check('ساخت مراقب 201 است',st==201,st)
+INV=d.get('invite_code')
+check('کد دعوت در پاسخ ساخت برگردانده می‌شود',bool(INV) and len(INV)>=16,INV)
+req(BASE,'/api/consents','POST',{'scope':'health','granted':True})
+st,dd=req(BASE,'/api/caregivers','POST',{'name':'مراقب امنیت','phone':PH,'role':'family'})
+check('ساخت مراقب با شمارهٔ تکراری -> 409',st==409 and dd.get('error')=='caregiver_exists',(st,dd))
+
+# --- شماره‌ها نباید به تماس‌گیرندهٔ ناشناس لو بروند ---
+st,d=req(BASE,'/api/caregivers')
+mine=[x for x in d.get('items',[]) if x.get('name')=='مراقب امنیت']
+check('GET /api/caregivers پاسخ می‌دهد',st==200,st)
+check('شماره برای ناشناس ماسک شده',mine and mine[0].get('phone')!=PH and '*' in str(mine[0].get('phone')),mine[:1])
+check('کد دعوت هرگز در GET برنمی‌گردد','invite_code' not in json.dumps(d,ensure_ascii=False),'invite_code لو رفت')
+
+# --- درِ ورود ---
+for label,payload in [('فقط شماره',{'phone':PH}),
+                      ('کد غلط لاتین',{'phone':PH,'code':'wrong-code'}),
+                      ('کد غلط فارسی',{'phone':PH,'code':'کد-اشتباه'}),
+                      ('کد خالی',{'phone':PH,'code':''})]:
+    st,d=req(BASE,'/api/caregiver/session','POST',payload)
+    check('ورود %s -> 403 (نه 500)'%label,st==403,st)
+    check('ورود %s کد invalid_credentials دارد'%label,d.get('error')=='invalid_credentials',d)
+st,d=req(BASE,'/api/caregiver/session','POST',{'phone':'09990001111','code':INV})
+check('شمارهٔ ناشناس + کد درست -> 403',st==403,st)
+check('پاسخ یکسان است تا وجود مراقب لو نرود',d.get('error')=='invalid_credentials',d)
+
+# --- سطح ادمین بدون توکن بسته است ---
+for ep in ['/api/admin/overview','/api/admin/activity','/api/admin/ai-config','/api/safety/rules']:
+    st,d=req(BASE,ep)
+    check('GET %s بدون توکن -> 403'%ep,st==403,st)
+    check('GET %s کد caregiver_session_required دارد'%ep,d.get('error')=='caregiver_session_required',d)
+st,d=req(BASE,'/api/admin/ai-config','POST',{'system_prompt':'دستور مخرب تزریق‌شده'})
+check('بازنویسی دستور سیستمی بدون توکن -> 403',st==403,st)
+st,d=req(BASE,'/api/admin/ai-config')
+check('دستور سیستمی دست‌نخورده مانده','مخرب تزریق‌شده' not in json.dumps(d,ensure_ascii=False),d)
+
+# --- محدودسازی نرخ، پیش از اعتبارسنجی ---
+for i in range(5):
+    st,d=req(BASE,'/api/caregiver/session','POST',{'phone':PH,'code':'bad%d'%i})
+st,d=req(BASE,'/api/caregiver/session','POST',{'phone':PH,'code':INV})
+check('پس از ۵ تلاش ناموفق، حتی کد درست -> 429',st==429,st)
+check('پاسخ قفل کد too_many_attempts دارد',d.get('error')=='too_many_attempts',d)
+# قفل نباید سراسری باشد
+PH2='092%08d'%(_t.time_ns()%100000000)
+st,d2=req(BASE,'/api/caregivers','POST',{'name':'مراقب دوم امنیت','phone':PH2,'role':'family'})
+st,d2=req(BASE,'/api/caregiver/session','POST',{'phone':PH2,'code':d2.get('invite_code')})
+check('قفل فقط روی همان شماره است نه سراسری',st==201 and bool(d2.get('token')),st)
+TOK=d2.get('token')
+AH={'X-Caregiver-Token':TOK or ''}
+
+# --- با توکن معتبر، همه چیز باز است ---
+for ep in ['/api/admin/overview','/api/admin/activity','/api/admin/ai-config','/api/safety/rules']:
+    u=urlparse(BASE)
+    conn=http.client.HTTPConnection(u.hostname,u.port,timeout=30)
+    conn.request('GET',ep,headers=AH); r=conn.getresponse(); r.read(); conn.close()
+    check('GET %s با توکن -> 200'%ep,r.status==200,r.status)
+
+# --- اندپوینت‌های سالمند باید باز بمانند (دستگاه تک‌کاربره) ---
+for ep in ['/api/profile','/api/medications','/api/dialects','/api/wallet','/api/emergency-card']:
+    st,_=req(BASE,ep)
+    check('اندپوینت سالمند %s باز است'%ep,st==200,st)
+st,_=req(BASE,'/api/caregiver/call-request','POST',{'reason':'تست'})
+check('درخواست تماس سالمند بدون توکن کار می‌کند',st==201,st)
+
+# --- نگهبان‌های کد ---
+check('توکن نشست با secrets ساخته می‌شود نه uuid4','secrets.token_urlsafe(32)' in srvsrc)
+check('مقایسهٔ کد دعوت زمان‌ثابت و بایتی است',
+      "hmac.compare_digest(code.encode('utf-8'),stored.encode('utf-8'))" in srvsrc)
+check('محافظ ادمین در مسیر GET هست',"p.startswith('/api/admin/')" in srvsrc)
+check('نتیجهٔ send() در متغیر ذخیره نمی‌شود','=send(self' not in srvsrc.replace(' ',''))
+
+print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
 if failures:
     print('شکست‌ها:'); [print(' -',f) for f in failures]

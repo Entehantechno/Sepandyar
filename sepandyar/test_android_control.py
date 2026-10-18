@@ -90,8 +90,12 @@ check('خطای گام در سابقه ثبت شده',any('پیدا نشد' in (
 print('--- 5) دید مراقب بر سوابق کنترل صفحه، فقط با رضایت ---')
 req('/api/consents','POST',{'scope':'health','granted':True,'confirmed_by_voice':True})
 req('/api/consents','POST',{'scope':'screen_control','granted':False,'confirmed_by_voice':False})
-req('/api/caregivers','POST',{'name':'مراقب کنترل صفحه','phone':'09127777777','role':'family','permissions':['health','screen_control']})
-s,j=req('/api/caregiver/session','POST',{'phone':'09127777777'}); tok=j.get('token'); check('نشست مراقب ساخته شد',s==201 and tok,(s,j))
+import time as _t
+_PH3='095%08d'%(_t.time_ns()%100000000)
+s,j=req('/api/caregivers','POST',{'name':'مراقب کنترل صفحه','phone':_PH3,'role':'family','permissions':['health','screen_control']}); invite=j.get('invite_code')
+check('کد دعوت برای مراقب کنترل صفحه صادر شد',bool(invite),(s,invite))
+s,j=req('/api/caregiver/session','POST',{'phone':_PH3}); check('شماره بدون کد دعوت = 403',s==403 and j.get('error')=='invalid_credentials',(s,j))
+s,j=req('/api/caregiver/session','POST',{'phone':_PH3,'code':invite}); tok=j.get('token'); check('نشست مراقب ساخته شد',s==201 and tok,(s,j))
 H={'X-Caregiver-Token':tok or ''}
 s,j=req('/api/caregiver/panel',headers=H)
 check('بدون رضایت screen_control، سوابق کنترل صفحه دیده نمی‌شود',s==200 and j.get('screen_tasks') is None and j.get('screen_control_shared') is False,(s,j.get('screen_control_shared')))

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """سپندیار — local MVP API. Production needs real auth, TLS, payment provider and managed DB."""
-import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, urllib.request as ureq, urllib.error as uerr
+import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, quote, parse_qs
@@ -55,6 +55,16 @@ def db(h=None):
  CREATE TABLE IF NOT EXISTS utterance_aliases(id TEXT PRIMARY KEY,transcript TEXT,intent_id TEXT,source TEXT,weight INTEGER DEFAULT 1,created_at TEXT);''')
  defaults=[('systolic','90','140','80','180'),('diastolic','60','90','50','120'),('glucose','70','180','54','300'),('weight','0','1000','0','1000')]
  for t,nmin,nmax,cmin,cmax in defaults: c.execute('INSERT OR IGNORE INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?)',(t,nmin,nmax,cmin,cmax,'system',now()))
+ cgcols=[x[1] for x in c.execute('PRAGMA table_info(caregivers)').fetchall()]
+ for _col,_ddl in (('invite_code','TEXT'),('failed_attempts','INTEGER DEFAULT 0'),('locked_until','TEXT')):
+  if _col not in cgcols: c.execute('ALTER TABLE caregivers ADD COLUMN %s %s'%(_col,_ddl))
+ # شمارهٔ تکراری باعث می‌شد کد دعوتِ نشان‌داده‌شده به ردیف دیگری تعلق داشته باشد
+ # تا ردیفی که هنگام ورود بررسی می‌شود؛ پس اول تکراری‌ها پاک و سپس قید یکتا ساخته می‌شود.
+ # توجه: MIN(rowid) باید با GROUP BY phone باشد؛ کوئری همبسته با «phone IS caregivers.phone»
+ # به همان حوزهٔ داخلی وصل می‌شد و همهٔ ردیف‌ها جز نخستین را پاک می‌کرد.
+ if c.execute('SELECT 1 FROM caregivers GROUP BY phone HAVING COUNT(*)>1 LIMIT 1').fetchone():
+  c.execute('DELETE FROM caregivers WHERE rowid NOT IN (SELECT MIN(rowid) FROM caregivers GROUP BY phone)'); c.commit()
+ c.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_caregivers_phone ON caregivers(phone)')
  cols=[x[1] for x in c.execute('PRAGMA table_info(transactions)').fetchall()]
  if 'idempotency_key' not in cols:
   c.execute('ALTER TABLE transactions ADD COLUMN idempotency_key TEXT')
@@ -413,6 +423,12 @@ def open_alert(c,atype,message,severity='normal'):
  aid=str(uuid.uuid4()); c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(aid,atype,message,severity,'open',now())); return aid
 def consent_granted(c,scope='health'):
  r=c.execute('SELECT granted FROM consents WHERE scope=?',(scope,)).fetchone(); return bool(r and r['granted'])
+def mask_phone(ph):
+ # شمارهٔ کامل، خودش عامل ورود است؛ به تماس‌گیرندهٔ ناشناس نشان داده نمی‌شود
+ ph=str(ph or '')
+ return (ph[:4]+'***'+ph[-2:]) if len(ph)>=7 else ('***' if ph else '')
+def new_invite_code():
+ return secrets.token_urlsafe(18)
 def caregiver_session(c,headers):
  tok=(headers.get('X-Caregiver-Token') or '').strip()
  if not tok: return None
@@ -440,6 +456,10 @@ class Handler(SimpleHTTPRequestHandler):
    except Exception: return None
  def _get(self):
   p=urlparse(self.path).path; c=db(self)
+  # سطح ادمین: پیش‌تر بدون هیچ احراز هویتی خوانده و نوشته می‌شد، از جمله بازنویسی
+  # دستور سیستمی هوش مصنوعی. بدون نشست معتبر مراقب هیچ دسترسی مجاز نیست.
+  if p.startswith('/api/admin/') or p=='/api/safety/rules':
+   if not caregiver_session(c,self.headers): return send(self,403,{'error':'caregiver_session_required','message':'برای این بخش ابتدا با شماره و کد دعوت مراقب وارد شوید.'})
   if p.startswith('/share/'):
    token=p.split('/')[-1]; data=share_payload(c,token)
    if not data: self.send_error(404,'share_not_found'); return
@@ -451,7 +471,15 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/consents': return send(self,200,{'items':rows(c,'SELECT * FROM consents ORDER BY scope')})
   if p=='/api/profile':
    r=c.execute('SELECT * FROM profile WHERE id=1').fetchone(); return send(self,200,dict(r) if r else {})
-  if p=='/api/caregivers': return send(self,200,{'items':rows(c,'SELECT * FROM caregivers ORDER BY created_at')})
+  if p=='/api/caregivers':
+   # شمارهٔ کامل، خودش عامل ورود مراقب است؛ برای تماس‌گیرندهٔ ناشناس ماسک می‌شود
+   authed=bool(caregiver_session(c,self.headers))
+   items=[]
+   for r in rows(c,'SELECT id,name,phone,role,permissions,created_at FROM caregivers ORDER BY created_at'):
+    it=dict(r); it['phone_masked']=mask_phone(it.get('phone'))
+    if not authed: it['phone']=it['phone_masked']
+    items.append(it)
+   return send(self,200,{'items':items})
   if p=='/api/wallet':
    w=dict(c.execute('SELECT * FROM wallet WHERE id=1').fetchone()); w['transactions']=rows(c,'SELECT id,kind,amount,description,created_at FROM transactions ORDER BY created_at DESC LIMIT 50'); return send(self,200,w)
   if p=='/api/medications': return send(self,200,{'items':rows(c,'SELECT * FROM medications ORDER BY time')})
@@ -595,6 +623,10 @@ class Handler(SimpleHTTPRequestHandler):
   # وگرنه مثلاً پروفایل کالیبره‌شدهٔ کاربر بی‌صدا بازنویسی می‌شود.
   if getattr(self,'_body_error',False): return send(self,400,{'error':'invalid_json','message':'بدنهٔ درخواست JSON معتبر نیست؛ هیچ تغییری اعمال نشد.'})
   c=db(self)
+  # سطح ادمین: پیش‌تر بدون هیچ احراز هویتی خوانده و نوشته می‌شد، از جمله بازنویسی
+  # دستور سیستمی هوش مصنوعی. بدون نشست معتبر مراقب هیچ دسترسی مجاز نیست.
+  if p.startswith('/api/admin/') or p=='/api/safety/rules':
+   if not caregiver_session(c,self.headers): return send(self,403,{'error':'caregiver_session_required','message':'برای این بخش ابتدا با شماره و کد دعوت مراقب وارد شوید.'})
   if p=='/api/consents':
    scope=d.get('scope','');
    if scope not in ('health','wallet','screen_control','voice_profile','emergency_call'): return send(self,400,{'error':'invalid_scope'})
@@ -657,7 +689,14 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/profile':
    c.execute('INSERT INTO profile(id,name,age,needs,assistant_name,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,age=excluded.age,needs=excluded.needs,assistant_name=excluded.assistant_name,updated_at=excluded.updated_at',(d.get('name',''),d.get('age'),d.get('needs',''),d.get('assistant_name','سپندیار'),now())); c.commit(); return send(self,200,{'ok':True})
   if p=='/api/caregivers':
-   cid=str(uuid.uuid4()); c.execute('INSERT INTO caregivers VALUES(?,?,?,?,?,?)',(cid,d.get('name',''),d.get('phone',''),d.get('role','family'),json.dumps(d.get('permissions',[]),ensure_ascii=False),now())); c.commit(); return send(self,201,{'id':cid,'ok':True})
+   _ph=str(d.get('phone','')).strip()
+   if _ph and c.execute('SELECT id FROM caregivers WHERE phone=?',(_ph,)).fetchone():
+    return send(self,409,{'error':'caregiver_exists','message':'این شماره پیش‌تر به عنوان مراقب ثبت شده است.'})
+   cid=str(uuid.uuid4()); code=new_invite_code()
+   c.execute('INSERT INTO caregivers(id,name,phone,role,permissions,created_at,invite_code,failed_attempts,locked_until) VALUES(?,?,?,?,?,?,?,?,NULL)',(cid,d.get('name',''),d.get('phone',''),d.get('role','family'),json.dumps(d.get('permissions',[]),ensure_ascii=False),now(),code,0)); c.commit()
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_invited',json.dumps({'name':d.get('name','')},ensure_ascii=False),now())); c.commit()
+   # کد دعوت فقط یک بار، در پاسخ ساخت، برگردانده می‌شود
+   return send(self,201,{'id':cid,'ok':True,'invite_code':code,'message':'این کد را به مراقب بدهید؛ فقط یک بار نشان داده می‌شود.'})
   if p=='/api/medications':
    mid=str(uuid.uuid4()); c.execute('INSERT INTO medications VALUES(?,?,?,?,?)',(mid,d.get('name',''),d.get('time',''),d.get('instructions',''),'pending')); c.commit(); return send(self,201,{'id':mid,'ok':True})
   if p.startswith('/api/medications/') and p.endswith('/details'):
@@ -799,9 +838,30 @@ class Handler(SimpleHTTPRequestHandler):
    phone=str(d.get('phone','')).strip()
    if not phone: return send(self,400,{'error':'phone_required'})
    cg=c.execute('SELECT * FROM caregivers WHERE phone=?',(phone,)).fetchone()
-   if not cg: return send(self,403,{'error':'caregiver_not_invited','message':'این شماره در فهرست مراقبان ثبت نشده است.'})
+   # پاسخ یکسان برای «شماره نیست» و «کد غلط است» تا وجود مراقب لو نرود.
+   # توجه: send() اثر جانبی دارد و فوراً پاسخ را می‌نویسد، پس نباید
+   # نتیجه‌اش را در متغیر ذخیره کرد؛ وگرنه پیش از اعتبارسنجی ۴۰۳ فرستاده می‌شود.
+   if not cg: return send(self,403,{'error':'invalid_credentials','message':'شماره یا کد دعوت نادرست است.'})
+   # قفل باید پیش از اعتبارسنجی بررسی شود؛ وگرنه مهاجمی که بالاخره کد درست را
+   # حدس بزند هرگز به آن نمی‌رسد و محدودسازی نرخ بی‌اثر می‌ماند.
+   if cg['locked_until'] and cg['locked_until']>now():
+    return send(self,429,{'error':'too_many_attempts','message':'به دلیل تلاش‌های ناموفق، ورود موقتاً مسدود است.'})
+   # شماره به‌تنهایی شناسه است نه راز؛ بدون کد دعوت هیچ جلسه‌ای باز نمی‌شود
+   code=str(d.get('code') or d.get('invite_code') or '').strip()
+   stored=str(cg['invite_code'] or '')
+   # compare_digest روی str غیر-ASCII استثنا می‌دهد؛ چون رابط کاربری فارسی است،
+   # تایپ اشتباه متن فارسی در فیلد کد نباید ۵۰۰ بدهد -> هر دو به بایت
+   if not stored or not code or not hmac.compare_digest(code.encode('utf-8'),stored.encode('utf-8')):
+    fa=int(cg['failed_attempts'] or 0)+1
+    lock=None
+    if fa>=5:
+     lock=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=15)).isoformat(); fa=0
+    c.execute('UPDATE caregivers SET failed_attempts=?,locked_until=? WHERE id=?',(fa,lock,cg['id']))
+    c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_login_failed',json.dumps({'phone':mask_phone(phone)},ensure_ascii=False),now())); c.commit()
+    return send(self,403,{'error':'invalid_credentials','message':'شماره یا کد دعوت نادرست است.'+((' به دلیل تلاش‌های ناموفق، ۱۵ دقیقه مسدود است.') if lock else '')})
    if not consent_granted(c,'health'): return send(self,403,{'error':'senior_consent_not_granted','message':'سالمند هنوز رضایت خود را برای اشتراک‌گذاری اطلاعات سلامت ثبت نکرده است.'})
-   tok=uuid.uuid4().hex; exp=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=7)).isoformat()
+   c.execute('UPDATE caregivers SET failed_attempts=0,locked_until=NULL WHERE id=?',(cg['id'],))
+   tok=secrets.token_urlsafe(32); exp=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=7)).isoformat()
    c.execute('INSERT INTO caregiver_sessions VALUES(?,?,?,?)',(tok,phone,now(),exp)); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_session_opened',json.dumps({'phone':phone},ensure_ascii=False),now())); c.commit()
    return send(self,201,{'token':tok,'expires_at':exp,'caregiver':{'name':cg['name'],'role':cg['role']}})
   if p=='/api/caregiver/session/revoke':
