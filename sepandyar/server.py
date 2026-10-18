@@ -46,7 +46,10 @@ def db():
  CREATE TABLE IF NOT EXISTS screen_task_runs(id TEXT PRIMARY KEY,app_package TEXT,title TEXT,status TEXT,steps_total INTEGER,steps_done INTEGER,error TEXT,started_at TEXT,finished_at TEXT);
  CREATE TABLE IF NOT EXISTS intent_lexicon(id TEXT PRIMARY KEY,label TEXT,action TEXT,keywords TEXT,image_query TEXT,priority INTEGER DEFAULT 0);
  CREATE TABLE IF NOT EXISTS image_cache(query TEXT PRIMARY KEY,items TEXT,source TEXT,fetched_at TEXT);
- CREATE TABLE IF NOT EXISTS disambiguation_events(id TEXT PRIMARY KEY,transcript TEXT,confidence REAL,options TEXT,chosen TEXT,resolved INTEGER DEFAULT 0,created_at TEXT);''')
+ CREATE TABLE IF NOT EXISTS disambiguation_events(id TEXT PRIMARY KEY,transcript TEXT,confidence REAL,options TEXT,chosen TEXT,resolved INTEGER DEFAULT 0,created_at TEXT);
+ CREATE TABLE IF NOT EXISTS dialect_lexicon(id TEXT PRIMARY KEY,accent TEXT,variant TEXT,canonical TEXT,note TEXT);
+ CREATE TABLE IF NOT EXISTS voice_profiles(id TEXT PRIMARY KEY,name TEXT,dialect TEXT,secondary_dialect TEXT,patience_ms INTEGER,confidence_floor REAL,calibrated INTEGER DEFAULT 0,updated_at TEXT);
+ CREATE TABLE IF NOT EXISTS utterance_aliases(id TEXT PRIMARY KEY,transcript TEXT,intent_id TEXT,source TEXT,weight INTEGER DEFAULT 1,created_at TEXT);''')
  defaults=[('systolic','90','140','80','180'),('diastolic','60','90','50','120'),('glucose','70','180','54','300'),('weight','0','1000','0','1000')]
  for t,nmin,nmax,cmin,cmax in defaults: c.execute('INSERT OR IGNORE INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?)',(t,nmin,nmax,cmin,cmax,'system',now()))
  cols=[x[1] for x in c.execute('PRAGMA table_info(transactions)').fetchall()]
@@ -89,6 +92,36 @@ def db():
       ('screen_control','کنترل اپ‌ها','screen_control',['اپ','اپلیکیشن','تلویزیون','کنترل','گوشی'],'smartphone screen with large app icons',50),
       ('chat','گفت‌وگو و هم‌صحبتی','chat',['حرف','صحبت','گپ','تنها','تنهایی','حوصله','دلم گرفته','بشنو','خاطره'],'two elderly friends having a friendly conversation',45)]
  for lid,label,action,kws,iq,prio in lex: c.execute('INSERT OR IGNORE INTO intent_lexicon VALUES(?,?,?,?,?,?)',(lid,label,action,json.dumps(kws,ensure_ascii=False),iq,prio))
+ # واژه‌نامه گویشی — بر پایه فهرست ۱۲ لهجه بنچمارک PSRB؛ این فهرست اولیه است و باید با گویشوران بومی اعتبارسنجی شود
+ dia=[
+  ('colloquial','دوا','دارو','محاوره عمومی'),('colloquial','دوام','دارویم','محاوره عمومی'),('colloquial','دواها','داروها','محاوره عمومی'),
+  ('colloquial','مریض خونه','بیمارستان','محاوره عمومی'),('colloquial','مریضخانه','بیمارستان','محاوره عمومی'),
+  ('colloquial','دکتر','پزشک','محاوره عمومی'),('colloquial','طبیب','پزشک','محاوره عمومی'),('colloquial','حکیم','پزشک','محاوره عمومی'),
+  ('colloquial','خونه','خانه','محاوره عمومی'),('colloquial','چایی','چای','محاوره عمومی'),('colloquial','نهار','ناهار','محاوره عمومی'),
+  ('colloquial','سرم گیج میره','سرگیجه','محاوره عمومی'),('colloquial','دور سرم میچرخه','سرگیجه','محاوره عمومی'),('colloquial','گیجی','سرگیجه','محاوره عمومی'),
+  ('colloquial','نفسم میگیره','تنگی نفس','محاوره عمومی'),('colloquial','دلم هوا میخواد','تنگی نفس','محاوره عمومی'),
+  ('colloquial','جون ندارم','ضعف','محاوره عمومی'),('colloquial','رمق ندارم','ضعف','محاوره عمومی'),('colloquial','بی حالم','ضعف','محاوره عمومی'),
+  ('colloquial','دلم بهم میخوره','حالت تهوع','محاوره عمومی'),('colloquial','تهوع دارم','حالت تهوع','محاوره عمومی'),
+  ('colloquial','فشارم','فشار خون','محاوره عمومی'),('colloquial','قندم','قند خون','محاوره عمومی'),
+  ('colloquial','میخوام','می‌خواهم','محاوره عمومی'),('colloquial','نمیخوام','نمی‌خواهم','محاوره عمومی'),
+  ('colloquial','میخواد','می‌خواهد','محاوره عمومی'),('colloquial','بده','بده','محاوره عمومی'),
+  ('colloquial','حالم','حالم','محاوره عمومی'),('colloquial','درد','درد','محاوره عمومی'),
+  ('colloquial','زنگ بزن','تماس بگیر','محاوره عمومی'),('colloquial','تلفن کن','تماس بگیر','محاوره عمومی'),
+  ('mashhadi','مو','من','ضمیر — لهجه مشهدی/خراسانی'),('mashhadi','مه','مال من','لهجه مشهدی'),('mashhadi','امه','آمده','لهجه مشهدی'),
+  ('mashhadi','رفه','رفته','لهجه مشهدی'),('mashhadi','نخوام','نمی‌خواهم','لهجه مشهدی'),('mashhadi','خوام','می‌خواهم','لهجه مشهدی'),
+  ('dari','مو','من','ضمیر — دری/افغانستان'),('dari','شفاخانه','بیمارستان','دری'),('dari','دواخانۀ','داروخانه','دری'),
+  ('shirazi','مه ره','مرا','لهجه شیرازی'),('shirazi','میرم','می‌روم','لهجه شیرازی'),('shirazi','نمیرم','نمی‌روم','لهجه شیرازی'),
+  ('isfahani','سی','برای','لهجه اصفهانی'),('isfahani','میرم','می‌روم','لهجه اصفهانی'),
+  ('yazdi','سی','برای','لهجه یزدی'),('yazdi','اِش','او','لهجه یزدی'),
+  ('azeri','جفتن','گفتن','گ → ج در لهجه ترکی'),('azeri','هردم','کردم','ک → ه در لهجه ترکی'),
+  ('azeri','یاش','سن','واژه ترکی'),('azeri','اوشاق','بچه','واژه ترکی'),('azeri','جوراب','جوراب','بدون تغییر'),
+  ('kurdish','چۆنی','چطوری','کردی'),('kurdish','خۆش','خوب','کردی'),('kurdish','ناخۆش','بیمار','کردی'),
+  ('lori','مه','من','ضمیر — لری'),('lori','ته','تو','ضمیر — لری'),('lori','دردمه','درد دارم','لری'),
+  ('shomali','تی','تو','ضمیر — گیلکی/مازندرانی'),('shomali','مه','من','ضمیر — شمالی'),
+  ('jonubi','مه','من','ضمیر — جنوبی/بندری'),('jonubi','بازار','خرید','جنوبی'),
+  ('baluchi','منی','من','ضمیر — بلوچی'),('baluchi','درد','درد','بدون تغییر'),
+  ('kermani','سی','برای','لهجه کرمانی'),('kermani','میرم','می‌روم','لهجه کرمانی')]
+ for i,(acc,var,can,note) in enumerate(dia): c.execute('INSERT OR IGNORE INTO dialect_lexicon VALUES(?,?,?,?,?)',('dl%d'%i,acc,var,can,note))
  c.commit(); return c
 def body(h):
  try: n=int(h.headers.get('Content-Length','0')); return json.loads(h.rfile.read(n) or '{}')
@@ -155,23 +188,95 @@ def norm_fa(t): return re.sub(r'[ًٌٍَُِّْ]','',str(t or '').replace('ي'
 def is_smalltalk(t):
  t=norm_fa(t)
  return bool(t) and len(t.split())<=2 and any(k in t for k in SMALLTALK)
-def match_candidates(c,text,limit=2):
+# ---- لایه گویش و لهجه (بر پایه بنچمارک PSRB: بدترین دقت فارسی روی لهجه مشهدی و یزدی) ----
+DEFAULT_PATIENCE_MS=1800   # پژوهش: آستانه ۱۵۰۰ms برای تماس‌های سلامت/سالمند توصیه شده؛ مکث میان جمله در دهه هشتاد زندگی ۵٫۴ برابر است
+OBJ_SUFFIXES=('مو','رو','شو','و')
+def get_voice_profile(c,pid='default'):
+ r=c.execute('SELECT * FROM voice_profiles WHERE id=?',(pid,)).fetchone()
+ if r: return dict(r)
+ return {'id':pid,'name':'کاربر','dialect':'standard','secondary_dialect':'','patience_ms':DEFAULT_PATIENCE_MS,'confidence_floor':0.55,'calibrated':0,'updated_at':None}
+def normalize_dialect(c,text,dialect=None,secondary=None):
+ """واژه‌های گویشی و محاوره‌ای را به فارسی معیار نگاشت می‌کند؛ فهرست قواعد اعمال‌شده را هم برمی‌گرداند.
+
+ نکته ایمنی: قواعد مخصوص یک لهجه فقط وقتی اعمال می‌شوند که پروفایل کاربر همان لهجه را
+ اعلام کرده باشد، و جایگزینی فقط روی مرز کلمه انجام می‌شود (بدون دست‌کاری نویسه‌ای)."""
+ raw=norm_fa(text)
+ if not raw: return '',[]
+ accs=[a for a in (dialect,secondary) if a and a!='standard']
+ q='SELECT variant,canonical,accent FROM dialect_lexicon WHERE accent IN (%s)'%','.join('?'*(len(accs)+2))
+ params=accs+['colloquial','standard']
+ if not accs:
+  q='SELECT variant,canonical,accent FROM dialect_lexicon WHERE accent IN (?,?)'; params=['colloquial','standard']
+ lexc=list(c.execute(q,tuple(params)))
+ multi={tuple(norm_fa(r['variant']).split()):(r['canonical'],r['accent']) for r in lexc if len(norm_fa(r['variant']).split())>1}
+ single={norm_fa(r['variant']):(r['canonical'],r['accent']) for r in lexc if len(norm_fa(r['variant']).split())==1}
+ tokens=raw.split(); applied=[]; out=[]; i=0; maxspan=max((len(k) for k in multi),default=0)
+ while i<len(tokens):
+  hit=None
+  for span in range(min(maxspan,len(tokens)-i),1,-1):
+   key=tuple(tokens[i:i+span])
+   if key in multi: hit=(span,)+multi[key]; break
+  if hit:
+   span,can,acc=hit; out.append(norm_fa(can)); applied.append({'from':' '.join(tokens[i:i+span]),'to':can,'accent':acc}); i+=span; continue
+  w=tokens[i]
+  if w in single:
+   can,acc=single[w]; out.append(norm_fa(can)); applied.append({'from':w,'to':can,'accent':acc})
+  else:
+   stem,note=strip_obj_suffix(w)
+   if note: applied.append({'from':w,'to':stem,'accent':'colloquial'})
+   if stem in single:
+    can,acc=single[stem]; out.append(norm_fa(can)); applied.append({'from':stem,'to':can,'accent':acc})
+   else: out.append(stem or w)
+  i+=1
+ dedup=[w for i,w in enumerate(out) if i==0 or w!=out[i-1]]
+ return ' '.join(dedup),applied
+def strip_obj_suffix(w):
+ """پسوند مفعولی محاوره‌ای را فقط وقتی برمی‌دارد که ریشه باقی‌مانده خودش یک کلمه معتبر باشد."""
+ for suf in OBJ_SUFFIXES:
+  if w.endswith(suf) and len(w)-len(suf)>=3: return w[:-len(suf)],'obj'
+ return w,''
+def find_alias(c,text,pid='default'):
+ t=norm_fa(text); best=None; score=0
+ for r in c.execute('SELECT * FROM utterance_aliases'):
+  a=norm_fa(r['transcript'])
+  if not a: continue
+  s=0
+  if a==t: s=1000
+  elif a in t or t in a: s=700
+  else:
+   ratio=difflib.SequenceMatcher(None,a,t).ratio()
+   if ratio>=0.78: s=int(ratio*600)
+  if s: s+=r['weight']
+  if s>score: score=s; best=r
+ return (best,score) if best else (None,0)
+def learn_alias(c,transcript,intent_id,source='disambiguation',pid='default'):
+ t=norm_fa(transcript)
+ if not t or len(t)<2: return False
+ hit=c.execute('SELECT * FROM utterance_aliases WHERE transcript=?',(t,)).fetchone()
+ if hit: c.execute('UPDATE utterance_aliases SET intent_id=?,weight=weight+1,source=? WHERE id=?',(intent_id,source,hit['id']))
+ else: c.execute('INSERT INTO utterance_aliases VALUES(?,?,?,?,?,?)',(str(uuid.uuid4()),t,intent_id,source,1,now()))
+ c.commit(); return True
+def match_candidates(c,text,limit=2,dialect=None,secondary=None,pid='default'):
  t=norm_fa(text)
  if not t: return []
+ al,asc=find_alias(c,t,pid)
+ if al: return [{'id':al['intent_id'],'label':(c.execute('SELECT label FROM intent_lexicon WHERE id=?',(al['intent_id'],)).fetchone() or {'label':al['intent_id']})['label'],'action':al['intent_id'],'image_query':(c.execute('SELECT image_query FROM intent_lexicon WHERE id=?',(al['intent_id'],)).fetchone() or {'image_query':'elderly care'})['image_query'],'score':asc,'source':'personal_alias'}]
+ canon,applied=normalize_dialect(c,t,dialect,secondary)
  scored=[]
  for r in rows(c,'SELECT * FROM intent_lexicon ORDER BY priority DESC'):
   best=0
   for kw in json.loads(r['keywords'] or '[]'):
    k=norm_fa(kw)
    if not k: continue
-   if k in t or t in k: best=max(best,100); continue
-   ratio=difflib.SequenceMatcher(None,k,t).ratio()
-   for w in t.split():
-    if len(w)>2: ratio=max(ratio,difflib.SequenceMatcher(None,k,w).ratio())
-   if ratio>=0.62: best=max(best,int(ratio*90))
+   for probe in (t,canon):
+    if k in probe or probe in k: best=max(best,100); continue
+    ratio=difflib.SequenceMatcher(None,k,probe).ratio()
+    for w in probe.split():
+     if len(w)>2: ratio=max(ratio,difflib.SequenceMatcher(None,k,w).ratio())
+    if ratio>=0.62: best=max(best,int(ratio*90))
   if best>0: scored.append((best,r))
  scored.sort(key=lambda x:-x[0])
- return [{'id':r['id'],'label':r['label'],'action':r['action'],'image_query':r['image_query'],'score':s} for s,r in scored[:limit]]
+ return [{'id':r['id'],'label':r['label'],'action':r['action'],'image_query':r['image_query'],'score':s,'source':'dialect_lexicon' if applied else 'keyword'} for s,r in scored[:limit]]
 def net_json(url,timeout=6):
  req=ureq.Request(url,headers={'User-Agent':IMAGE_UA,'Accept':'application/json'})
  with ureq.urlopen(req,timeout=timeout) as r: return json.loads(r.read())
@@ -324,6 +429,14 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/symptoms/catalog': return send(self,200,{'items':rows(c,'SELECT name,escalate FROM symptom_catalog ORDER BY sort_order')})
   if p=='/api/symptoms': return send(self,200,{'items':rows(c,'SELECT * FROM symptom_reports ORDER BY created_at DESC LIMIT 50')})
   if p=='/api/safety/rules': return send(self,200,{'items':rows(c,'SELECT level,pattern,action,reply FROM safety_rules ORDER BY level,pattern')})
+  if p=='/api/dialects':
+   acc=rows(c,"SELECT accent,COUNT(*) AS entries FROM dialect_lexicon GROUP BY accent ORDER BY entries DESC")
+   known={'mashhadi':'مشهدی/خراسانی','yazdi':'یزدی','shirazi':'شیرازی','isfahani':'اصفهانی','azeri':'ترکی/آذری','kurdish':'کردی','lori':'لری','shomali':'شمالی (گیلکی/مازندرانی)','jonubi':'جنوبی/بندری','baluchi':'بلوچی','dari':'دری','kermani':'کرمانی','colloquial':'محاوره عمومی','standard':'فارسی معیار'}
+   # دقت نسبی از بنچمارک PSRB (SW-WER میانگین ده سامانه؛ عدد کمتر بهتر)
+   psrb={'kurdish':36.7,'mashhadi':53.3,'shirazi':43.8,'shomali':41.8,'standard':None}
+   return send(self,200,{'items':[{'accent':a['accent'],'label':known.get(a['accent'],a['accent']),'entries':a['entries'],'psrb_sw_wer':psrb.get(a['accent']),'patience_ms':get_voice_profile(c)['patience_ms']} for a in acc],'source':'PSRB (arXiv:2505.21230) + PDID (arXiv:2510.09528)'})
+  if p=='/api/voice-profile': return send(self,200,get_voice_profile(c,parse_qs(urlparse(self.path).query).get('id',['default'])[0]))
+  if p=='/api/aliases': return send(self,200,{'items':rows(c,'SELECT transcript,intent_id,weight,source,created_at FROM utterance_aliases ORDER BY weight DESC, created_at DESC LIMIT 100')})
   if p=='/api/intents': return send(self,200,{'items':rows(c,'SELECT id,label,action,image_query,priority FROM intent_lexicon ORDER BY priority DESC')})
   if p=='/api/images/search':
    qs=parse_qs(urlparse(self.path).query); q=(qs.get('q') or [''])[0]; cnt=min(int((qs.get('count') or ['2'])[0] or 2),6)
@@ -474,12 +587,42 @@ class Handler(SimpleHTTPRequestHandler):
     resp.update({'alert_id':aid,'action_id':act,'reply':'این علامت را ثبت کردم و فوراً به مراقب شما اطلاع دادم. لطفاً منتظر تماس او باشید.'})
    else: resp['reply']='علامت «'+sym+'» را ثبت کردم و در گزارش مراقب شما قرار دادم.'
    c.commit(); return send(self,201,resp)
+  if p=='/api/voice-profile':
+   pid=str(d.get('id') or 'default')
+   pat=d.get('patience_ms'); floor=d.get('confidence_floor')
+   try: pat=int(pat) if pat is not None else DEFAULT_PATIENCE_MS
+   except Exception: pat=DEFAULT_PATIENCE_MS
+   try: floor=float(floor) if floor is not None else 0.55
+   except Exception: floor=0.55
+   pat=max(400,min(pat,5000)); floor=max(0.05,min(floor,0.95))
+   c.execute('INSERT OR REPLACE INTO voice_profiles VALUES(?,?,?,?,?,?,?,?)',(pid,str(d.get('name') or 'کاربر'),str(d.get('dialect') or 'standard'),str(d.get('secondary_dialect') or ''),pat,floor,1 if d.get('calibrated') else 0,now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'voice_profile_set',json.dumps({'dialect':d.get('dialect'),'patience_ms':pat},ensure_ascii=False),now())); c.commit()
+   return send(self,200,get_voice_profile(c,pid))
+  if p=='/api/calibration':
+   """کالیبراسیون کوتاه هنگام راه‌اندازی: کاربر چند عبارت کوتاه می‌خواند؛ اطمینان‌ها سنجیده و صبر و آستانه تنظیم می‌شود."""
+   pid=str(d.get('id') or 'default'); samples=d.get('samples') or []
+   if not isinstance(samples,list) or not samples: return send(self,400,{'error':'samples_required'})
+   confs=[]
+   for s in samples:
+    try: v=float(s.get('confidence'))
+    except Exception: v=None
+    if v is not None: confs.append(max(0.0,min(v,1.0)))
+   if not confs: return send(self,400,{'error':'no_numeric_confidence'})
+   avg=sum(confs)/len(confs); worst=min(confs)
+   # پژوهش CHI'26: کالیبراسیون شخصی + آستانه محافظه‌کارانه برای گفتار سالمند
+   patience=int(round(DEFAULT_PATIENCE_MS*(1.0+(0.55-avg)) )) if avg<0.55 else DEFAULT_PATIENCE_MS
+   patience=max(900,min(patience,4000))
+   floor=0.40 if avg<0.5 else (0.50 if avg<0.7 else 0.60)
+   c.execute('INSERT OR REPLACE INTO voice_profiles VALUES(?,?,?,?,?,?,?,?)',(pid,str(d.get('name') or 'کاربر'),str(d.get('dialect') or (c.execute('SELECT dialect FROM voice_profiles WHERE id=?',(pid,)).fetchone() or {'dialect':'standard'})['dialect']),str(d.get('secondary_dialect') or ''),patience,floor,1,now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'voice_calibration',json.dumps({'samples':len(confs),'avg':round(avg,3),'worst':round(worst,3),'patience_ms':patience,'confidence_floor':floor},ensure_ascii=False),now())); c.commit()
+   return send(self,200,{'ok':True,'samples':len(confs),'avg_confidence':round(avg,3),'worst_confidence':round(worst,3),'patience_ms':patience,'confidence_floor':floor,'advice':'آرام و شمرده بخوانید؛ دستگاه وسط جمله شما را قطع نمی‌کند.'})
   if p=='/api/disambiguate':
    text=str(d.get('text','')); conf=d.get('confidence')
    try: conf=float(conf) if conf is not None else None
    except Exception: conf=None
    limit=min(max(int(d.get('limit') or 2),2),3)
-   cands=match_candidates(c,text,limit)
+   prof=get_voice_profile(c,str(d.get('profile') or 'default'))
+   cands=match_candidates(c,text,limit,prof['dialect'],prof['secondary_dialect'],str(d.get('profile') or 'default'))
    if len(cands)<2:
     for r in rows(c,'SELECT * FROM intent_lexicon ORDER BY priority DESC LIMIT 5'):
      if r['id'] not in [x['id'] for x in cands]: cands.append({'id':r['id'],'label':r['label'],'action':r['action'],'image_query':r['image_query'],'score':0})
@@ -499,8 +642,12 @@ class Handler(SimpleHTTPRequestHandler):
    if not row: return send(self,404,{'error':'session_not_found'})
    c.execute('UPDATE disambiguation_events SET chosen=?,resolved=1 WHERE id=?',(chosen,eid))
    lex=c.execute('SELECT * FROM intent_lexicon WHERE id=?',(chosen,)).fetchone()
+   # یادگیری: همان عبارت لهجه‌دار دفعه بعد مستقیم شناخته می‌شود (پژوهش: ترمیم توسط کاربر ~۶۰٪ موفق)
+   learned=False
+   if lex and not chosen.startswith('__') and row['transcript']:
+    learned=learn_alias(c,row['transcript'],chosen,'disambiguation',str(d.get('profile') or 'default'))
    c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'disambiguation_resolved',json.dumps({'chosen':chosen,'transcript':row['transcript']},ensure_ascii=False),now())); c.commit()
-   return send(self,200,{'ok':True,'action':lex['action'] if lex else None,'label':lex['label'] if lex else chosen})
+   return send(self,200,{'ok':True,'action':lex['action'] if lex else None,'label':lex['label'] if lex else chosen,'learned':learned,'aliases':c.execute('SELECT COUNT(*) FROM utterance_aliases').fetchone()[0]})
   if p=='/api/screen-tasks':
    rid=str(uuid.uuid4())
    c.execute('INSERT INTO screen_task_runs VALUES(?,?,?,?,?,?,?,?,?)',(rid,str(d.get('package','')),str(d.get('title','')),str(d.get('status','unknown')),int(d.get('steps_total') or 0),int(d.get('steps_done') or 0),str(d.get('error','')),str(d.get('started_at') or now()),now()))
@@ -554,14 +701,21 @@ class Handler(SimpleHTTPRequestHandler):
     else: extra={'action_id':enqueue_caregiver_action(c,'professional_referral',{'text':str(d.get('text',''))[:300],'matched':risk['matched']})}
     c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'safety_intercept',json.dumps({'level':risk['level'],'matched':risk['matched']},ensure_ascii=False),now())); c.commit()
     out={'intent':'safety.emergency' if risk['action']=='emergency' else 'safety.referral','spoken_reply':risk['reply'],'requires_confirmation':True,'safety':'urgent' if risk['level']=='critical' else 'caution','clinical_answer_blocked':True}; out.update(extra); return send(self,200,out)
-   text=str(d.get('text','')).replace('ي','ی').replace('ك','ک'); intent='conversation.general'; reply='درخواست شما را شنیدم و آماده کمک هستم.'
-   if 'کیف پول' in text or 'موجودی' in text: intent='wallet.balance'; reply='موجودی کیف پول شما آماده بررسی است.'
+   raw=str(d.get('text','')); pid=str(d.get('profile') or 'default'); prof=get_voice_profile(c,pid)
+   alias,ascore=find_alias(c,raw,pid)
+   text,rules=normalize_dialect(c,raw,prof['dialect'],prof['secondary_dialect'])
+   text=text.replace('ي','ی').replace('ك','ک'); intent='conversation.general'; reply='درخواست شما را شنیدم و آماده کمک هستم.'
+   if alias:
+    intent=alias['intent_id']; alab=(c.execute('SELECT label FROM intent_lexicon WHERE id=?',(intent,)).fetchone() or {'label':intent})['label']
+    reply='بله، '+alab+' — از بار قبل یادم مانده.'
+   elif 'کیف پول' in text or 'موجودی' in text: intent='wallet.balance'; reply='موجودی کیف پول شما آماده بررسی است.'
    elif 'دارو' in text: intent='medication.list_today'; reply='داروهای امروز شما را آماده کردم.'
    elif 'کمک' in text or 'اورژانس' in text: intent='emergency.request_help'; reply='درخواست کمک فوری نیازمند تأیید صوتی شماست.'
    conf=d.get('confidence')
    try: conf=float(conf) if conf is not None else None
    except Exception: conf=None
-   stuck=(intent=='conversation.general' and not is_smalltalk(text)) or (conf is not None and conf<0.55)
-   return send(self,200,{'intent':intent,'spoken_reply':reply,'requires_confirmation':intent.startswith(('wallet','emergency')),'safety':'caution' if intent.startswith(('wallet','emergency')) else 'normal','needs_clarification':bool(stuck),'candidates':match_candidates(c,text,2) if stuck else [],'confidence':conf})
+   floor=prof['confidence_floor'] if prof['confidence_floor'] else 0.55
+   stuck=(intent=='conversation.general' and not is_smalltalk(text)) or (conf is not None and conf<floor)
+   return send(self,200,{'intent':intent,'spoken_reply':reply,'requires_confirmation':intent.startswith(('wallet','emergency')),'safety':'caution' if intent.startswith(('wallet','emergency')) else 'normal','needs_clarification':bool(stuck),'candidates':match_candidates(c,text,2,prof['dialect'],prof['secondary_dialect'],pid) if stuck else [],'confidence':conf,'normalized':text,'dialect_rules_applied':rules,'alias_used':alias['intent_id'] if alias else None,'patience_ms':prof['patience_ms'],'confidence_floor':floor})
   return send(self,404,{'error':'not_found'})
 if __name__=='__main__': print('Sepandyar API listening on 0.0.0.0:4174'); ThreadingHTTPServer(('0.0.0.0',4174),Handler).serve_forever()
