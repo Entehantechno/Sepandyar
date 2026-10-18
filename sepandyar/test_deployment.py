@@ -641,7 +641,12 @@ check('ارجاع مرده به toggleSetting(largeText) نمانده',"toggleSe
 
 # ۸) وزیرمتن در هر سه داشبورد (خوانایی فارسی)
 for name,src in [('index.html',html),('caregiver.html',cghtml),('admin.html',adhtml)]:
-    check(name+' فونت وزیرمتن دارد','Vazirmatn' in src and '@import' in src)
+    # فونت باید با <link> + preconnect بارگذاری شود نه @import درون <style>:
+    # @import یک درخواست سریال می‌سازد و تا رسیدن فونت، رندر را مسدود می‌کند.
+    check(name+' فونت وزیرمتن دارد','Vazirmatn' in src)
+    check(name+' فونت را با <link> می‌گیرد نه @import',
+          'rel="stylesheet"' in src and '@import' not in src)
+    check(name+' preconnect برای CDN فونت دارد','fonts.gstatic.com' in src)
 
 # ۹) سرریز: ظرف با ارتفاع ثابت که فونت بزرگ‌شده در آن جا نمی‌شود.
 # این باگ را خودِ بالا بردن کف فونت ساخت: .transcript ارتفاع ۲۰px ثابت داشت
