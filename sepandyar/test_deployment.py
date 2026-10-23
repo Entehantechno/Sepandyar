@@ -7,7 +7,7 @@
 ۳) مجوز INTERNET در مانیفست اعلام نشده بود
 ۴) service worker همهٔ GETها از جمله /api/ را کش می‌کرد (دادهٔ کهنهٔ دارو و سلامت)
 """
-import json, os, re, sys, threading, http.client, importlib.util, subprocess, shutil
+import json, os, re, sys, threading, http.client, importlib.util, subprocess, shutil, uuid, datetime
 from http.server import ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -807,6 +807,95 @@ for m in _re3.finditer(r'([^{}]+)\{([^}]*)\}',uicss):
     if float(h.group(1)) < px*1.5:
         overflow.append((m.group(1).strip()[-22:],h.group(1)+'px',f'{px:.0f}px فونت'))
 check('هیچ ظرف با ارتفاع ثابت، متن بزرگ‌شده را نمی‌بُرد',not overflow,overflow[:5])
+
+print('--- 14) چهار شکاف رقابتی: حافظه، زمان‌بند، نسخه، خط پایه ---')
+# این چهار مورد از تحلیل رقبا درآمد (docs/COMPETITOR_ANALYSIS_FA.md).
+# هر چهار تست رفتاری‌اند، نه ساختاری: واقعاً endpoint را صدا می‌زنند.
+
+# --- شکاف ۱: حافظهٔ مکالمه ---
+_uid=uuid.uuid4().hex[:10]
+_prof='t14_'+_uid
+for _t in ('حالم خوب است','سرم درد می‌کند'):
+    req(BASE,'/api/ai/chat','POST',{'text':_t,'profile':_prof})
+_st,_h=req(BASE,'/api/conversation/history?profile='+_prof)
+check('حافظه: گفتگو ذخیره می‌شود',_st==200 and len(_h.get('items',[]))==2,(_st,len(_h.get('items',[]))))
+_st,_h2=req(BASE,'/api/conversation/history?profile=t14_isolated_'+_uid)
+check('حافظه: profile‌ها از هم ایزوله‌اند',len(_h2.get('items',[]))==0,_h2.get('items'))
+_st,_h3=req(BASE,'/api/caregiver/conversation-summary?profile='+_prof)
+check('حفاظت حریم: خلاصهٔ گفتگو بدون نشست مراقب ۴۰۳ است',_st==403,_st)
+# turn پرخطر باید flagged شود تا در خلاصه دیده شود
+req(BASE,'/api/ai/chat','POST',{'text':'می‌خواهم قرص‌ها را قطع کنم','profile':_prof})
+check('حافظه: جدول conversation_turns وجود دارد','CREATE TABLE IF NOT EXISTS conversation_turns' in srvsrc)
+check('حافظه: call_llm تاریخچه را تزریق می‌کند','memory_block(c,pid)' in srvsrc)
+
+# --- شکاف ۲: زمان‌بند و پله‌بندی ---
+_st,_p=req(BASE,'/api/proactive/due')
+check('زمان‌بند: endpoint سررسید سالم است',_st==200,_st)
+check('زمان‌بند: پاسخ کلید escalated دارد','escalated' in _p,list(_p.keys()))
+check('زمان‌بند: محرک پس‌زمینه وجود دارد','def scheduler_loop' in srvsrc)
+check('زمان‌بند: thread در راه‌اندازی شروع می‌شود','threading.Thread(target=scheduler_loop,daemon=True).start()' in srvsrc)
+import sqlite3 as _sq
+_c=_sq.connect(os.path.join(ROOT,'sepandyar.db')); _c.row_factory=_sq.Row
+_cols=[x[1] for x in _c.execute('PRAGMA table_info(proactive_events)')]
+check('زمان‌بند: ستون escalated_at افزوده شده','escalated_at' in _cols,_cols)
+# پله‌بندی واقعی: یک رویداد کهنهٔ بی‌پاسخ باید به هشدار تبدیل شود
+_old=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=3)).isoformat()
+_eid=uuid.uuid4().hex
+_c.execute('INSERT INTO proactive_events VALUES(?,?,?,?,?,?,?)',(_eid,'morning_checkin','2026-01-01',_old,None,None,None))
+_c.commit(); _c.close()
+_st,_p2=req(BASE,'/api/proactive/due')
+check('زمان‌بند: رویداد کهنهٔ بی‌پاسخ پله‌بندی می‌شود',_eid in _p2.get('escalated',[]),_p2.get('escalated'))
+_st,_a=req(BASE,'/api/alerts')
+check('زمان‌بند: هشدار بی‌پاسخی ثبت شد',
+      any(x['type']=='proactive_no_response' for x in _a.get('items',[])))
+_st,_p3=req(BASE,'/api/proactive/due')
+check('زمان‌بند: پله‌بندی تکراری رخ نمی‌دهد',_eid not in _p3.get('escalated',[]),_p3.get('escalated'))
+
+# --- شکاف ۳: ورود نسخه ---
+_ref='rx14_'+_uid
+_st,_r=req(BASE,'/api/prescriptions','POST',{'image_ref':_ref,'items':[{'name':'آتورواستاتین','dose':'20mg','schedule':'شبانه'}]})
+check('نسخه: ثبت می‌شود',_st==201,_st)
+_pid=_r.get('id')
+check('نسخه: اقلامش ذخیره می‌شوند',len(_r.get('items',[]))==1,_r.get('items'))
+_st,_r2=req(BASE,'/api/prescriptions','POST',{'image_ref':_ref})
+check('نسخه: تکراری ۴۰۹ می‌دهد',_st==409,_st)
+_st,_r3=req(BASE,'/api/prescriptions','POST',{'items':[{'name':'x'}]})
+check('نسخه: بدون image_ref ۴۰۰ می‌دهد',_st==400,_st)
+_st,_r4=req(BASE,'/api/prescriptions','POST',{'image_ref':'rx14b_'+_uid,'items':[{'name':'بی‌نام','dose':1}]})
+check('نسخه: دوز غیررشته‌ای ۵۰۰ نمی‌دهد',_st in (201,400),_st)
+_iid=_r['items'][0]['id']
+_st,_r5=req(BASE,'/api/prescriptions/%s/confirm'%_pid,'POST',{'item_id':_iid,'time':'21:00'})
+check('نسخه: تأیید قلم دارو می‌سازد',_st==201 and _r5.get('medication_id'),(_st,_r5))
+_st,_m=req(BASE,'/api/medications')
+check('نسخه: داروی تأییدشده واقعاً در فهرست داروهاست',
+      'آتورواستاتین' in [x['name'] for x in _m.get('items',[])])
+_st,_r6=req(BASE,'/api/prescriptions/%s/confirm'%_pid,'POST',{'item_id':_iid})
+check('نسخه: تأیید دوباره idempotent است',_r6.get('already_confirmed') is True,_r6)
+_st,_r7=req(BASE,'/api/prescriptions/nopresc14/confirm','POST',{'item_id':'x'})
+check('نسخه: نسخهٔ ناموجود ۴۰۴ می‌دهد',_st==404,_st)
+_st,_r8=req(BASE,'/api/prescriptions/%s/confirm'%_pid,'POST',{'item_id':'noitem14'})
+check('نسخه: قلم ناموجود ۴۰۴ می‌دهد',_st==404,_st)
+_st,_l=req(BASE,'/api/prescriptions')
+check('نسخه: فهرست با اقلامش خوانده می‌شود',_st==200 and any(x['id']==_pid for x in _l.get('items',[])),_st)
+
+# --- شکاف ۴: انحراف از خط پایه ---
+for _i in range(6):
+    req(BASE,'/api/vitals','POST',{'type':'blood_pressure','value':{'systolic':126+_i,'diastolic':82}})
+req(BASE,'/api/vitals','POST',{'type':'blood_pressure','value':{'systolic':182,'diastolic':112}})
+_st,_b=req(BASE,'/api/baselines')
+_bl={x['type']:x for x in _b.get('baselines',[])}
+check('خط پایه: محاسبه می‌شود',_st==200 and 'systolic' in _bl,(_st,list(_bl)))
+check('خط پایه: میانگین و انحراف معیار دارد',
+      'systolic' in _bl and 'mean' in _bl['systolic'] and 'stddev' in _bl['systolic'])
+check('خط پایه: جهش ناگهانی را انحراف می‌شناسد',
+      'systolic' in _bl and _bl['systolic'].get('deviation') is True,_bl.get('systolic'))
+check('خط پایه: روند را گزارش می‌کند',_bl.get('systolic',{}).get('trend') in ('rising','falling','stable'))
+check('خط پایه: برای انحراف هشدار می‌سازد',len(_b.get('alerts_created',[]))>=1,_b.get('alerts_created'))
+_st,_b2=req(BASE,'/api/baselines')
+check('خط پایه: هشدار تکراری نمی‌سازد',len(_b2.get('alerts_created',[]))==0,_b2.get('alerts_created'))
+_st,_al=req(BASE,'/api/alerts')
+check('خط پایه: هشدار در فهرست هشدارها می‌نشیند',
+      any(x['type'].startswith('baseline_deviation') for x in _al.get('items',[])))
 
 print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
