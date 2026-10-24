@@ -1178,6 +1178,116 @@ for _path,_label in [('/index.html','صفحهٔ سالمند'),('/caregiver.html
 check('allowlist روی مسیر decode‌شده سنجیده می‌شود',
       'unquote(p,errors=' in open(os.path.join(ROOT,'server.py'),encoding='utf-8').read())
 
+# ── بخش ۱۹: دور یازدهم باگ‌یابی — HEAD، کلید تکرارناپذیری، سقف بدنه، تایم‌اوت ──
+# هر چهار باگ روی سرور در حال اجرا اندازه‌گیری و سپس رفع شد. برای هر کدام هم
+# آزمون رفتاری آمده و هم یک ممیز قطعی روی خود منبع؛ چون آزمون زمانی/رقابتی
+# ذاتاً احتمالی است و یک بار روی کد باگ‌دار هم قبول شد.
+print()
+print('— بخش ۱۹: دور یازدهم —')
+import socket as _sk19, ast as _ast19
+
+_u19 = urlparse(B14)
+def _raw19(method, path, body=b'', hdrs=None):
+    c = http.client.HTTPConnection(_u19.hostname, _u19.port, timeout=60)
+    c.request(method, path, body=body, headers=hdrs or {})
+    r = c.getresponse(); d = r.read(); cl = r.getheader('Content-Length', ''); c.close()
+    return r.status, cl, d
+
+# ۱) HEAD دیگر allowlist را دور نمی‌زند. do_HEAD در SimpleHTTPRequestHandler
+#    مستقیم send_head() را صدا می‌زند و اصلاً از do_GET نمی‌گذرد.
+for _p, _lbl in [('/sepandyar.db', 'پایگاه‌دادهٔ سلامت'), ('/server.py', 'کد منبع'),
+                 ('/test_deployment.py', 'مجموعهٔ آزمون'), ('/test_mvp.py', 'آزمون mvp'),
+                 ('/docs/', 'فهرست docs'), ('/uploads/', 'فهرست uploads'),
+                 ('/production/', 'فهرست production'), ('/android/', 'فهرست android'),
+                 ('/..%2fserver.py', 'رمزگذاری percent'), ('/%2e%2e/server.py', 'رمزگذاری نقطه')]:
+    _s, _cl, _d = _raw19('HEAD', _p)
+    check('HEAD نشتی نمی‌دهد: ' + _lbl, _s == 404, (_s, _cl))
+for _p, _sz in [('/', 117516), ('/index.html', 117516), ('/caregiver.html', 14517),
+                ('/admin.html', 12116), ('/investor.html', 6907), ('/sw.js', 1593),
+                ('/manifest.webmanifest', 351)]:
+    _s, _cl, _d = _raw19('HEAD', _p)
+    check('HEAD دارایی مجاز سالم است: ' + _p, _s == 200 and _cl == str(_sz), (_s, _cl))
+check('دروازه در send_head است نه فقط در _get', 'def send_head(self):' in srvsrc)
+
+# ۲) کلید تکرارناپذیری باید به عملیات مقید باشد، وگرنه کلیدِ یک شارژ پرداخت را
+#    «موفق» جا می‌زند در حالی که هیچ پرداختی انجام نشده است.
+def _bal19():
+    _s, _b = req(B14, '/api/wallet'); return _b.get('balance')
+_b0 = _bal19(); _k19 = str(uuid.uuid4())
+req(B14, '/api/wallet/topups', 'POST', {'amount': 5000, 'idempotency_key': _k19})
+_s, _d = req(B14, '/api/wallet/payment', 'POST', {'amount': 3000, 'idempotency_key': _k19})
+check('کلید شارژ، پرداخت را بی‌صدا «موفق» نمی‌کند', _s == 200 and not _d.get('replayed'), (_s, _d))
+check('پرداخت واقعاً روی موجودی می‌نشیند', _bal19() == _b0 + 5000 - 3000, (_bal19(), _b0 + 2000))
+_k20 = str(uuid.uuid4())
+req(B14, '/api/wallet/topups', 'POST', {'amount': 1000, 'idempotency_key': _k20})
+_s, _d = req(B14, '/api/wallet/topups', 'POST', {'amount': 77777, 'idempotency_key': _k20})
+check('کلید یکسان با مبلغ متفاوت → ۴۰۹', _s == 409 and _d.get('error') == 'idempotency_key_conflict', (_s, _d))
+_s, _d = req(B14, '/api/wallet/topups', 'POST', {'amount': 1000, 'idempotency_key': _k20})
+check('تکرار مشروع همان درخواست → ۲۰۰', _s == 200 and _d.get('replayed') is True, (_s, _d))
+check('کلید به عملیات مقید می‌شود', "idem_key(self,d,'topup')" in srvsrc and "idem_key(self,d,'payment')" in srvsrc)
+
+# ۳) سقف اندازهٔ بدنه. بدون آن، یک بدنهٔ ۲۰۰MB پایگاه‌داده را برای همیشه به
+#    ۲۲۱MB رساند (۲۲۰MB صفحهٔ مرده که بدون VACUUM برنمی‌گردد).
+_s, _cl, _d = _raw19('POST', '/api/profile',
+                     body=b'{"name":"' + b'A' * (1024 * 1024 + 10) + b'"}',
+                     hdrs={'Content-Type': 'application/json'})
+check('بدنهٔ بزرگ‌تر از ۱MB → ۴۱۳', _s == 413, (_s,))
+_s, _cl, _d = _raw19('POST', '/api/profile',
+                     body='{"name":"بی‌بی‌جان"}'.encode(),
+                     hdrs={'Content-Type': 'application/json'})
+check('بدنهٔ کوچک هنوز پذیرفته می‌شود', _s == 200, (_s,))
+check('سقف پیش از خواندن بدنه سنجیده می‌شود',
+      'MAX_BODY_BYTES=1024*1024' in srvsrc and 'if n>MAX_BODY_BYTES:' in srvsrc)
+_s, _b = req(B14, '/api/profile')
+check('پس از ۴۱۳ چیزی نوشته نشده', _b.get('name') == 'بی‌بی‌جان', (_b,))
+
+# ۴) تایم‌اوت سوکت. بدون آن هر اتصال نیمه‌باز یک رشته را برای همیشه نگه می‌دارد
+#    (slowloris): اندازه‌گیری شد ۲۰ اتصال → ۲۰ رشته که پس از ۲۵ ثانیه هم آزاد نشدند.
+_t19 = _m14.Handler.timeout
+check('تایم‌اوت سوکت تنظیم شده', isinstance(_t19, (int, float)) and _t19 > 0, (_t19,))
+check('تایم‌اوت از کُندترین مسیر مشروع بزرگ‌تر است', isinstance(_t19, (int, float)) and _t19 >= 15, (_t19,))
+# آزمون رفتاری مکانیسم، با تایم‌اوت کوتاه روی یک زیرکلاس تا سوئیت کند نشود.
+class _H19(_m14.Handler):
+    timeout = 2
+_s19 = ThreadingHTTPServer(('127.0.0.1', 0), _H19)
+threading.Thread(target=_s19.serve_forever, daemon=True).start()
+_c19 = _sk19.create_connection(('127.0.0.1', _s19.server_address[1]), timeout=20)
+_c19.sendall(b'POST /api/profile HTTP/1.1\r\nHost: x\r\nContent-Length: 5000\r\n\r\n')
+_w19 = datetime.datetime.now(); _answered19 = False; _data19 = b''
+try:
+    _c19.settimeout(12)
+    _data19 = _c19.recv(200)   # b'' یعنی بست، b'HTTP...' یعنی پاسخ داد
+    _answered19 = True
+except Exception:
+    _answered19 = False        # تایم‌اوت کلاینت رسید = سرور آویزان مانده
+_el19 = (datetime.datetime.now() - _w19).total_seconds()
+# هنگام تایم‌اوت، body() استثنا را می‌گیرد و _body_error می‌نشاند، پس پاسخ ۴۰۰ است.
+check('اتصال نیمه‌باز آویزان نمی‌ماند و پاسخ می‌گیرد',
+      _answered19 and _el19 < 10, (_answered19, round(_el19, 1)))
+check('پاسخِ اتصال نیمه‌باز ۴۰۰ است نه آویزانی',
+      _data19.startswith(b'HTTP/1.0 400'), (_data19[:24],))
+try:
+    _s19.shutdown(); _s19.server_close(); _c19.close()
+except Exception:
+    pass
+
+# ۵) رفتن کلاینت نباید ۵۰۰ جعلی در لاگ بنشاند. send() روی سوکت مرده شکست
+#    می‌خورد و except عمومی سپس یک ۵۰۰ لاگ می‌کرد که خطای واقعی را می‌پوشاند.
+_tree19 = _ast19.parse(srvsrc)
+def _handler_order19(fname):
+    for _n in _ast19.walk(_tree19):
+        if isinstance(_n, _ast19.FunctionDef) and _n.name == fname:
+            for _st in _n.body:
+                if isinstance(_st, _ast19.Try):
+                    return [(_h.type.id if isinstance(_h.type, _ast19.Name) else None)
+                            for _h in _st.handlers]
+    return []
+for _fn in ('do_GET', 'do_POST'):
+    _hs = _handler_order19(_fn)
+    check(_fn + ': ConnectionError زودتر از Exception گرفته می‌شود',
+          'ConnectionError' in _hs and 'Exception' in _hs
+          and _hs.index('ConnectionError') < _hs.index('Exception'), (_hs,))
+
 _srv14.shutdown(); _srv14.server_close()
 
 print()

@@ -160,12 +160,28 @@ def desurrogate(v):
  if isinstance(v,list): return [desurrogate(x) for x in v]
  return v
 
+# سقف بدنهٔ درخواست: ۱MB. بزرگ‌ترین بدنهٔ مشروع این API چند کیلوبایت است؛
+# nginx هم به‌طور پیش‌فرض client_max_body_size را ۱MB می‌گیرد.
+MAX_BODY_BYTES=1024*1024
 def body(h):
  """بدنهٔ JSON را می‌خواند. خطای تجزیه را روی خود نمونهٔ handler علامت می‌زند
 (نه یک متغیر سراسری) تا در سرور نخی بین درخواست‌ها نشت نکند."""
  h._body_error=False
+ h._body_too_large=False
  try:
-  n=int(h.headers.get('Content-Length','0')); raw=h.rfile.read(n)
+  n=int(h.headers.get('Content-Length','0'))
+  # سقف اندازهٔ بدنه، پیش از خواندن حتی یک بایت. خواندن هدر تقریباً رایگان
+  # است ولی read(n) با n بزرگ همان حجم را در حافظه نگه می‌دارد و سپس در
+  # پایگاه‌داده نوشته می‌شود؛ اندازه‌گیری شد: یک بدنهٔ ۲۰۰MB پایگاه‌داده را
+  # برای همیشه به ۲۲۱MB رساند (۲۲۰MB صفحهٔ مرده که بدون VACUUM برنمی‌گردد).
+  if n<0:
+   h._body_error=True
+   return {}
+  if n>MAX_BODY_BYTES:
+   h._body_too_large=True
+   return {}
+  # n اکنون در بازهٔ [۰, MAX] است، پس خودِ خواندن هم کران‌دار است.
+  raw=h.rfile.read(n)
   if not raw or not raw.strip(): return {}
   v=json.loads(raw)
   if not isinstance(v,dict):
@@ -404,11 +420,19 @@ def as_text(v,default=''):
  if isinstance(v,(dict,list)): return None
  return str(v)
 
-def idem_key(h,d):
+def idem_key(h,d,op=''):
  # کلید تکرارناپذیری فقط وقتی معنا دارد که کلاینت آن را بفرستد.
  # کلید مشتق از بدنه، دو تراکنش یکسانِ ولی جدا را یکی می‌کرد و شارژ دوم را بی‌صدا می‌بلعید.
+ #
+ # کلید باید به عملیات هم مقید باشد، نه سراسری. پیش‌تر جست‌وجو فقط با خودِ
+ # کلید بود و دو مسیر یک فضای نام مشترک داشتند؛ در عمل: شارژ ۵۰۰۰ با کلید K
+ # موفق می‌شد و بعد «پرداخت ۳۰۰۰ با همان K» پاسخ ۲۰۰ «succeeded» می‌گرفت،
+ # در حالی که هیچ پرداختی انجام نشده بود و موجودی دست‌نخورده می‌ماند.
+ # پیشوند، فضای نام هر عملیات را جدا می‌کند و چون مقدارِ ذخیره‌شده همچنان
+ # یکتا می‌ماند، همان UNIQUE INDEX قبلی مرز همزمانی باقی می‌ماند.
  k=h.headers.get('Idempotency-Key') or d.get('idempotency_key')
- return str(k) if k else 'auto-'+str(uuid.uuid4())
+ if not k: return 'auto-'+str(uuid.uuid4())
+ return (op+'::' if op else '')+str(k)
 
 def get_voice_profile(c,pid='default'):
  r=c.execute('SELECT * FROM voice_profiles WHERE id=?',(pid,)).fetchone()
@@ -636,6 +660,17 @@ def primary_caregiver(c):
 STATIC_ALLOW=frozenset({'/','/index.html','/caregiver.html','/admin.html',
                         '/investor.html','/sw.js','/manifest.webmanifest'})
 class Handler(SimpleHTTPRequestHandler):
+ # تایم‌اوت سوکت، وگرنه هر اتصال نیمه‌باز یک رشته را برای همیشه نگه می‌دارد.
+ # timeout در زنجیرهٔ ارث None است و StreamRequestHandler.setup() فقط وقتی آن
+ # را settimeout می‌کند که None نباشد؛ در نتیجه read(n) تا ابد مسدود می‌ماند.
+ # اندازه‌گیری شد: ۲۰ اتصال نیمه‌باز → ۲۰ رشتهٔ بلوکه که پس از ۲۵ ثانیه هم
+ # آزاد نشدند (سبک slowloris). سقف اندازهٔ بدنه جلوی این را نمی‌گیرد، چون
+ # حمله زمان است نه حجم: نگه‌داشتن سوکت برای کلاینت هیچ هزینه‌ای ندارد.
+ # BaseHTTPRequestHandler.handle_one_request تایم‌اوت سوکت را پایان درخواست
+ # می‌گیرد و اتصال را می‌بندد، پس چیز دیگری لازم نیست تغییر کند.
+ # ۳۰ ثانیه با فاصلهٔ امن بالای کُندترین مسیر مشروع است (پروکسی Gemini
+ # تایم‌اوت ۱۵ ثانیه دارد).
+ timeout=30
  def __init__(self,*a,**kw):
   self._db=None
   try: super().__init__(*a,directory=ROOT,**kw)
@@ -649,9 +684,22 @@ class Handler(SimpleHTTPRequestHandler):
  def do_OPTIONS(self): self.send_response(204); self.send_header('Access-Control-Allow-Origin','*'); self.send_header('Access-Control-Allow-Headers','Content-Type,Idempotency-Key,X-Caregiver-Token'); self.send_header('Access-Control-Allow-Methods','GET,POST,PUT,OPTIONS'); self.end_headers()
  def do_GET(self):
   try: return self._get()
+  except ConnectionError:
+   return None
   except Exception:
    try: return send(self,500,{'error':'server_error'})
    except Exception: return None
+ def send_head(self):
+  # آخرین لایهٔ دفاع. do_HEAD در SimpleHTTPRequestHandler مستقیم send_head()
+  # را صدا می‌زند و اصلاً از do_GET نمی‌گذرد، پس دروازهٔ allowlist در _get
+  # برای HEAD بی‌اثر بود: «HEAD /sepandyar.db» با ۲۰۰ و Content-Length کامل
+  # پاسخ می‌گرفت. allowlist باید در پایین‌ترین لایه باشد تا هیچ متد دیگری
+  # هم نتواند دورش بزند.
+  p=urlparse(self.path).path
+  if unquote(p,errors='surrogateescape') not in STATIC_ALLOW:
+   self.send_error(404,'Not Found')
+   return None
+  return super().send_head()
  def _get(self):
   p=urlparse(self.path).path; c=db(self)
   # سطح ادمین: پیش‌تر بدون هیچ احراز هویتی خوانده و نوشته می‌شد، از جمله بازنویسی
@@ -846,6 +894,13 @@ class Handler(SimpleHTTPRequestHandler):
     except Exception: return None
    try: return send(self,500,{'error':'server_error'})
    except Exception: return None
+  except ConnectionError:
+   # کلاینت پیش از گرفتن پاسخ رفته است (RST یا بستن ناگهانی). خودِ send() هم
+   # روی سوکت مرده شکست می‌خورد، و تلاش برای فرستادن ۵۰۰ یک ورودی ۵۰۰ جعلی
+   # در لاگ می‌نشاند. بازتولید شد: هر درخواست RST‌شده «۴۰۰ و سپس ۵۰۰» ثبت
+   # می‌کرد، در حالی که سرور هیچ خطایی نداشت. این کار پایش خطا را آلوده می‌کند
+   # و ۵۰۰ واقعی را پنهان می‌سازد.
+   return None
   except Exception:
    try: return send(self,500,{'error':'server_error'})
    except Exception: return None
@@ -853,6 +908,7 @@ class Handler(SimpleHTTPRequestHandler):
   p=urlparse(self.path).path; d=body(self)
   # بدنهٔ ناقص/خراب هرگز نباید به‌صورت «درخواست خالی معتبر» تفسیر شود،
   # وگرنه مثلاً پروفایل کالیبره‌شدهٔ کاربر بی‌صدا بازنویسی می‌شود.
+  if getattr(self,'_body_too_large',False): return send(self,413,{'error':'payload_too_large','message':'بدنهٔ درخواست بزرگ‌تر از حد مجاز است؛ هیچ تغییری اعمال نشد.','max_bytes':MAX_BODY_BYTES})
   if getattr(self,'_body_error',False): return send(self,400,{'error':'invalid_json','message':'بدنهٔ درخواست JSON معتبر نیست؛ هیچ تغییری اعمال نشد.'})
   c=db(self)
   # سطح ادمین: پیش‌تر بدون هیچ احراز هویتی خوانده و نوشته می‌شد، از جمله بازنویسی
@@ -1027,17 +1083,24 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/alerts':
    aid=str(uuid.uuid4()); c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(aid,d.get('type','general'),d.get('message',''),d.get('severity','normal'),'open',now())); c.commit(); return send(self,201,{'id':aid,'ok':True})
   if p=='/api/wallet/topups':
-   amount=as_int(d.get('amount',0)); key=idem_key(self,d)
+   amount=as_int(d.get('amount',0)); key=idem_key(self,d,'topup')
    if amount is None: return send(self,400,{'error':'invalid_amount','message':'مبلغ باید عدد باشد.'})
    old=c.execute('SELECT * FROM transactions WHERE idempotency_key=?',(key,)).fetchone()
-   if old: return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':old['id']})
+   if old:
+    # اثرانگشت درخواست: همان کلید با عملیات یا مبلغ متفاوت، تکرارِ همان
+    # درخواست نیست و نباید پاسخِ درخواست قبلی را بی‌صدا برگرداند.
+    if old['kind']!='topup' or old['amount']!=amount: return send(self,409,{'error':'idempotency_key_conflict','message':'این کلید تکرارناپذیری پیش‌تر برای درخواست دیگری به کار رفته است.'})
+    return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':old['id'],'replayed':True})
    if amount<=0 or amount>100000000: return send(self,400,{'error':'invalid_amount'})
    tid=str(uuid.uuid4()); c.execute('UPDATE wallet SET balance=balance+? WHERE id=1',(amount,)); c.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',(tid,'topup',amount,d.get('description','شارژ کیف پول'),now(),key)); c.commit(); return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':tid})
   if p=='/api/wallet/payment':
-   amount=as_int(d.get('amount',0)); key=idem_key(self,d)
+   amount=as_int(d.get('amount',0)); key=idem_key(self,d,'payment')
    if amount is None: return send(self,400,{'error':'invalid_amount','message':'مبلغ باید عدد باشد.'})
    old=c.execute('SELECT * FROM transactions WHERE idempotency_key=?',(key,)).fetchone()
-   if old: return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':old['id'],'replayed':True})
+   if old:
+    # در جدول، مبلغ پرداخت به‌صورت منفی ذخیره می‌شود.
+    if old['kind']!='payment' or old['amount']!=-amount: return send(self,409,{'error':'idempotency_key_conflict','message':'این کلید تکرارناپذیری پیش‌تر برای درخواست دیگری به کار رفته است.'})
+    return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':old['id'],'replayed':True})
    w=c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance']
    if amount<=0 or amount>w: return send(self,409,{'status':'insufficient_funds','balance':w})
    tid=str(uuid.uuid4()); c.execute('UPDATE wallet SET balance=balance-? WHERE id=1',(amount,)); c.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',(tid,'payment',-amount,d.get('description','پرداخت'),now(),key)); c.commit(); return send(self,200,{'status':'succeeded','transaction_id':tid,'balance':w-amount})
