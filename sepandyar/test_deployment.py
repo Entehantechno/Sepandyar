@@ -1228,10 +1228,17 @@ check('کلید به عملیات مقید می‌شود', "idem_key(self,d,'top
 
 # ۳) سقف اندازهٔ بدنه. بدون آن، یک بدنهٔ ۲۰۰MB پایگاه‌داده را برای همیشه به
 #    ۲۲۱MB رساند (۲۲۰MB صفحهٔ مرده که بدون VACUUM برنمی‌گردد).
-_s, _cl, _d = _raw19('POST', '/api/profile',
-                     body=b'{"name":"' + b'A' * (1024 * 1024 + 10) + b'"}',
-                     hdrs={'Content-Type': 'application/json'})
-check('بدنهٔ بزرگ‌تر از ۱MB → ۴۱۳', _s == 413, (_s,))
+# سرور ۴۱۳ را می‌فرستد و سپس اتصال را می‌بندد؛ اگر کلاینت هنوز وسط نوشتن
+# باشد، نوشتن با BrokenPipeError شکست می‌خورد. هر دو نشانهٔ رد کردن است، پس
+# این بررسی باید هر دو را بپذیرد وگرنه بسته به زمان‌بندی بافر ناپایدار می‌شود.
+try:
+    _s, _cl, _d = _raw19('POST', '/api/profile',
+                         body=b'{"name":"' + b'A' * (1024 * 1024 + 10) + b'"}',
+                         hdrs={'Content-Type': 'application/json'})
+    _refused19 = (_s == 413)
+except (BrokenPipeError, ConnectionError, http.client.RemoteDisconnected) as _e19b:
+    _refused19 = True
+check('بدنهٔ بزرگ‌تر از ۱MB رد می‌شود', _refused19, (_s if '_s' in dir() else 'پیش از پاسخ',))
 _s, _cl, _d = _raw19('POST', '/api/profile',
                      body='{"name":"بی‌بی‌جان"}'.encode(),
                      hdrs={'Content-Type': 'application/json'})
@@ -1287,6 +1294,66 @@ for _fn in ('do_GET', 'do_POST'):
     check(_fn + ': ConnectionError زودتر از Exception گرفته می‌شود',
           'ConnectionError' in _hs and 'Exception' in _hs
           and _hs.index('ConnectionError') < _hs.index('Exception'), (_hs,))
+
+# ── بخش ۲۰: دور دوازدهم باگ‌یابی — XSS ذخیره‌شده در گزارش اشتراک ──
+# /share/<token> گزارش را با text/html سرو می‌کند و report_html آن را با
+# f-string می‌سازد، بدون هیچ escape. چون endpoint ها عمداً verbatim ذخیره
+# می‌کنند (دفاع در زمان رندر)، هر فیلد خام یعنی اجرای اسکریپت در مرورگر
+# کسی که لینک اشتراک را باز می‌کند — یعنی خانوادهٔ سالمند.
+# اندازه‌گیری شد: name برابر <script>document.title="pwned"</script> ذخیره شد،
+# گزارش آن را خام برگرداند و در jsdom عنوان صفحه واقعاً «pwned» شد.
+print()
+print('— بخش ۲۰: دور دوازدهم —')
+import ast as _ast20
+
+_P20 = '<script>document.title="pwned"</script>'
+_P21 = '<img src=x onerror="alert(1)">'
+_P22 = '<b>manual</b>'
+_s20, _ = req(B14, '/api/profile', 'POST', {'name': _P20, 'needs': _P21, 'age': 78})
+check('بارگذاری payload در پروفایل', _s20 == 200, (_s20,))
+_s20, _ = req(B14, '/api/vitals', 'POST', {'type': 'weight', 'value': 72.5, 'source': _P22})
+check('بارگذاری payload در منبع علائم حیاتی', _s20 in (200, 201), (_s20,))
+_s20, _b20 = req(B14, '/api/vitals/share', 'POST', {'scope': 'vitals', 'expires_days': 7})
+check('ساخت لینک اشتراک', _s20 == 201 and _b20.get('token'), (_s20,))
+_s20, _h20 = req(B14, '/share/' + str(_b20.get('token')))
+_h20s = _h20.get('_raw', '') if isinstance(_h20, dict) else str(_h20)
+check('گزارش سرو می‌شود', _s20 == 200 and len(_h20s) > 200, (_s20, len(_h20s)))
+for _pay, _lbl in [(_P20, 'اسکریپت در نام'), (_P21, 'هندلر رویداد در نیازمندی‌ها'),
+                   (_P22, 'تگ در منبع')]:
+    check('XSS ذخیره‌شده بسته شد: ' + _lbl, _pay not in _h20s, (_pay,))
+check('escape واقعاً انجام شده نه فقط حذف',
+      '&lt;script&gt;' in _h20s and '&lt;img' in _h20s, (_h20s[:120],))
+# کنترل مثبت: محتوای مشروع باید دست‌نخورده بماند
+for _ok20, _lbl in [('گزارش علائم حیاتی', 'عنوان فارسی'), ('78', 'سن'),
+                    ('72.5', 'مقدار علائم حیاتی'), ('جایگزین تشخیص پزشک', 'سلب مسئولیت')]:
+    check('محتوای مشروع سالم ماند: ' + _lbl, _ok20 in _h20s, (_ok20,))
+# ممیز قطعی روی منبع: هیچ FormattedValue بدون _e() در report_html نمانده باشد
+_tree20 = _ast20.parse(srvsrc)
+def _unescaped20(fname):
+    bad = []
+    for _n in _ast20.walk(_tree20):
+        if isinstance(_n, _ast20.FunctionDef) and _n.name == fname:
+            for _js in _ast20.walk(_n):
+                if isinstance(_js, _ast20.JoinedStr):
+                    for _v in _js.values:
+                        if isinstance(_v, _ast20.FormattedValue):
+                            _f = _v.value
+                            _okc = (isinstance(_f, _ast20.Call)
+                                    and isinstance(_f.func, _ast20.Name)
+                                    and _f.func.id == '_e')
+                            if not _okc:
+                                bad.append(_ast20.unparse(_f)[:40])
+    return bad
+_bad20 = _unescaped20('report_html')
+# «tr» رشتهٔ ردیف‌هاست و خودش تنها از پاره‌های _e() ساخته می‌شود — و چون همین
+# پیمایش کل بدنهٔ تابع را می‌گردد، آن پاره‌ها را هم بررسی کرده است. پس مجاز
+# است. هر نام دیگری یعنی یک فیلد خامِ تازه که بی‌صدا اضافه شده.
+_unexpected20 = [b for b in _bad20 if b != 'tr']
+check('report_html: هیچ درون‌ریزی خامی نمانده (جز tr که از _e ساخته می‌شود)',
+      not _unexpected20, _bad20)
+check('کمکی escape تعریف شده و به کار رفته',
+      'def _e(v):' in srvsrc and srvsrc.count('_e(') >= 9, (srvsrc.count('_e('),))
+check('ماژول html وارد شده', ', html,' in srvsrc)
 
 _srv14.shutdown(); _srv14.server_close()
 
