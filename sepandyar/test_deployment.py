@@ -1042,6 +1042,78 @@ for _n,_want in [(0,0),(2,1)]:
     check('max_nudges=%d → %d یادآوری (تنظیم مرده نیست)'%(_n,_want),_got==_want,(_got,_want))
 req(B14,'/api/reminder-settings','POST',{'quiet_start':'22:00','quiet_end':'07:00','max_nudges':2})
 
+# ---------------------------------------------------------------- بخش ۱۷
+# باگ‌یابی دور نهم: همان الگوی race که در دور هفتم در escalate_stale_prompts
+# رفع شد، در دو تابع دیگر هم بود — «اول SELECT شرطی، بعد INSERT» بدون تصاحب
+# اتمیک. چون هر دو را هم endpoint و هم thread زمان‌بند (یا چند poll همزمان
+# داشبورد) صدا می‌زنند، زیر بار واقعی خروجی تکراری می‌ساختند.
+print()
+print('۱۷) تصاحب اتمیک در نوشتن‌های شرطی (باگ‌یابی دور نهم)')
+_TZ=_m14.ZoneInfo('Asia/Tehran')
+def _race17(fn,seed,threads=6):
+    seed()
+    _bar=threading.Barrier(threads); _out=[]
+    def _w():
+        _cc=_m14.db()
+        try: _bar.wait(); _out.append(fn(_cc))
+        finally: _cc.close()
+    _ts=[threading.Thread(target=_w) for _ in range(threads)]
+    for _t in _ts: _t.start()
+    for _t in _ts: _t.join()
+    return _out
+def _seed_prompts():
+    _c=sqlite3.connect(_m14.DB); _c.execute('DELETE FROM proactive_events'); _c.commit(); _c.close()
+_at17=datetime.datetime(2026,1,15,9,0,0,tzinfo=_TZ)
+_r=_race17(lambda cc: len(_m14.collect_due_prompts(cc,at_local=_at17)),_seed_prompts)
+_c=sqlite3.connect(_m14.DB); _n17=_c.execute('SELECT COUNT(*) FROM proactive_events').fetchone()[0]; _c.close()
+check('همزمانی: ۶ فراخوانی همزمان یک سررسید، یک پرامپت',
+      sum(1 for _x in _r if _x)==1 and _n17==1,(sorted(_r,reverse=True),_n17))
+
+def _seed_dev():
+    _c=sqlite3.connect(_m14.DB)
+    for _t in ['alerts','caregiver_actions','vitals']: _c.execute('DELETE FROM '+_t)
+    if not list(_c.execute('SELECT id FROM caregivers')):
+        _c.execute("INSERT INTO caregivers VALUES('cg17','مریم','0912','daughter','[]','2026-01-01',NULL,0,NULL)")
+    for _i,_v in enumerate([128,130,126,129,127,131,178]):
+        _c.execute('INSERT INTO vitals VALUES(?,?,?,?,?,?)',(uuid.uuid4().hex,'blood_pressure',
+            json.dumps({'systolic':_v,'diastolic':82}),'manual',
+            (datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(minutes=60-_i)).isoformat(),
+            datetime.datetime.now(datetime.timezone.utc).isoformat()))
+    _c.commit(); _c.close()
+_r2=_race17(lambda cc: len(_m14.detect_deviation_alerts(cc)),_seed_dev)
+_c=sqlite3.connect(_m14.DB)
+_a17=_c.execute("SELECT COUNT(*) FROM alerts WHERE type LIKE 'baseline_deviation%'").fetchone()[0]
+_g17=_c.execute('SELECT COUNT(*) FROM caregiver_actions').fetchone()[0]; _c.close()
+check('همزمانی: یک انحراف، یک هشدار',sum(1 for _x in _r2 if _x)==1 and _a17==1,(sorted(_r2,reverse=True),_a17))
+check('همزمانی: یک انحراف، یک کنش مراقب',_g17==1,_g17)
+
+# --- کنترل مثبت: dedupe بیش از حد نشده باشد
+_c=sqlite3.connect(_m14.DB)
+for _t in ['alerts','vitals','proactive_events']: _c.execute('DELETE FROM '+_t)
+_c.commit(); _c.close()
+_cc=_m14.db()
+check('کنترل: اولین پرامپت سررسید ساخته می‌شود',
+      len(_m14.collect_due_prompts(_cc,at_local=_at17))==1)
+check('کنترل: همان روز تکرار نمی‌شود',
+      len(_m14.collect_due_prompts(_cc,at_local=_at17))==0)
+check('کنترل: روز بعد دوباره ساخته می‌شود',
+      len(_m14.collect_due_prompts(_cc,at_local=datetime.datetime(2026,1,16,9,0,0,tzinfo=_TZ)))==1)
+check('کنترل: ساعت بی‌ربط چیزی نمی‌سازد',
+      len(_m14.collect_due_prompts(_cc,at_local=datetime.datetime(2026,1,16,14,0,0,tzinfo=_TZ)))==0)
+check('کنترل: هشدار نوع دیگر مستقل ساخته می‌شود',
+      _m14.open_alert_once(_cc,'type_a','m') is not None and _m14.open_alert_once(_cc,'type_b','m') is not None)
+check('کنترل: هشدار بازِ تکراری ساخته نمی‌شود',
+      _m14.open_alert_once(_cc,'type_a','m') is None)
+_c=sqlite3.connect(_m14.DB); _c.execute("UPDATE alerts SET status='resolved' WHERE type='type_a'"); _c.commit(); _c.close()
+check('کنترل: پس از بسته‌شدن هشدار، دوباره ساخته می‌شود',
+      _m14.open_alert_once(_cc,'type_a','m') is not None)
+check('کنترل: open_alert معمولی هنوز بدون محدودیت می‌سازد',
+      _m14.open_alert(_cc,'plain','m') is not None and _m14.open_alert(_cc,'plain','m') is not None)
+_cc.close()
+_c=sqlite3.connect(_m14.DB)
+for _t in ['alerts','vitals','proactive_events','caregiver_actions']: _c.execute('DELETE FROM '+_t)
+_c.commit(); _c.close()
+
 _srv14.shutdown(); _srv14.server_close()
 
 print()

@@ -267,9 +267,12 @@ def collect_due_prompts(c,at_local=None):
  hhmm=nl.strftime('%H:%M'); day=nl.date().isoformat(); out=[]
  for kind,at,text in PROACTIVE_PROMPTS:
   delta=abs((datetime.datetime.strptime(hhmm,'%H:%M')-datetime.datetime.strptime(at,'%H:%M')).total_seconds())
-  if delta<=300 and not c.execute('SELECT 1 FROM proactive_events WHERE kind=? AND prompt_date=?',(kind,day)).fetchone():
-   eid=str(uuid.uuid4()); c.execute('INSERT INTO proactive_events VALUES(?,?,?,?,?,?,?)',(eid,kind,day,now(),None,None,None))
-   out.append({'id':eid,'kind':kind,'text':text,'prompt_date':day})
+  if delta<=300:
+   # تصاحب اتمیک در یک دستور: پیش از این endpoint و زمان‌بند هر دو SELECT را
+   # «خالی» می‌دیدند و برای یک سررسید چند پرامپت تکراری ساخته می‌شد.
+   eid=str(uuid.uuid4())
+   cur=c.execute("INSERT INTO proactive_events(id,kind,prompt_date,delivered_at,response,responded_at,escalated_at) SELECT ?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM proactive_events WHERE kind=? AND prompt_date=?)",(eid,kind,day,now(),None,None,None,kind,day))
+   if cur.rowcount: out.append({'id':eid,'kind':kind,'text':text,'prompt_date':day})
  c.commit(); return out
 def escalate_stale_prompts(c):
  """پیش‌دستی واقعی یعنی همین: اگر سالمند جواب نداد، خانواده باخبر شود.
@@ -335,8 +338,8 @@ def detect_deviation_alerts(c,report=None):
  for b in (report or baseline_report(c)):
   if not b['deviation']: continue
   sig='baseline_deviation:'+b['type']
-  if c.execute("SELECT 1 FROM alerts WHERE type=? AND status='open'",(sig,)).fetchone(): continue
-  aid=open_alert(c,sig,'انحراف معنادار در '+b['type']+': آخرین مقدار '+str(b['latest'])+' در برابر میانگین '+str(b['mean'])+' (z='+str(b['z_score'])+')','warning')
+  aid=open_alert_once(c,sig,'انحراف معنادار در '+b['type']+': آخرین مقدار '+str(b['latest'])+' در برابر میانگین '+str(b['mean'])+' (z='+str(b['z_score'])+')','warning')
+  if not aid: continue   # دیگری زودتر ساخت؛ کنش مراقب هم تکرار نشود
   cg=primary_caregiver(c) or {}
   if cg: enqueue_caregiver_action(c,'call_request',{'phone':cg.get('phone',''),'caregiver':cg.get('name',''),'reason':'انحراف در '+b['type']+' مشاهده شد.'})
   made.append(aid)
@@ -597,6 +600,14 @@ def enqueue_caregiver_action(c,kind,payload,requested_by='senior'):
  aid=str(uuid.uuid4()); c.execute('INSERT INTO caregiver_actions VALUES(?,?,?,?,?,?,NULL,NULL)',(aid,kind,json.dumps(payload,ensure_ascii=False),'pending',requested_by,now())); return aid
 def open_alert(c,atype,message,severity='normal'):
  aid=str(uuid.uuid4()); c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(aid,atype,message,severity,'open',now())); return aid
+def open_alert_once(c,atype,message,severity='normal'):
+ """هشدار را فقط وقتی می‌سازد که نمونهٔ بازی از همین نوع وجود نداشته باشد.
+ انتخاب و نوشتن در یک دستور است و SQLite فقط یک نویسندهٔ همزمان دارد، پس
+ دو فراخوانی همزمان نمی‌توانند هر دو ردیف بسازند. اگر ساخته نشد None می‌دهد.
+ (الگوی قبلی «اول SELECT بعد INSERT» بود و زیر بار همزمان هشدار تکراری می‌ساخت.)"""
+ aid=str(uuid.uuid4())
+ cur=c.execute("INSERT INTO alerts(id,type,message,severity,status,created_at) SELECT ?,?,?,?,'open',? WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE type=? AND status='open')",(aid,atype,message,severity,now(),atype))
+ return aid if cur.rowcount else None
 def consent_granted(c,scope='health'):
  r=c.execute('SELECT granted FROM consents WHERE scope=?',(scope,)).fetchone(); return bool(r and r['granted'])
 def mask_phone(ph):
