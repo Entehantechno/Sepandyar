@@ -3,7 +3,7 @@
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from urllib.parse import urlparse, quote, parse_qs
+from urllib.parse import urlparse, quote, unquote, parse_qs
 ROOT=os.path.dirname(__file__); DB=os.path.join(ROOT,'sepandyar.db')
 def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat()
 def db(h=None):
@@ -624,6 +624,17 @@ def caregiver_session(c,headers):
  return dict(r)
 def primary_caregiver(c):
  r=c.execute('SELECT * FROM caregivers ORDER BY created_at LIMIT 1').fetchone(); return dict(r) if r else None
+# تنها پرونده‌هایی که از وب سرو می‌شوند. تا پیش از این super().do_GET() هر
+# پروندهٔ زیر ROOT را می‌داد — از جمله sepandyar.db (کل پایگاه‌دادهٔ سلامت
+# سالمند، ۴۱۷ کیلوبایت)، server.py، مجموعهٔ آزمون، و فهرست پوشه‌های
+# docs/ و uploads/ و production/.
+# ریسرچ نشان داد blocklist با percent-encoding دور زده می‌شود چون
+# SimpleHTTPRequestHandler مسیر را پیش از نگاشت به دیسک decode می‌کند
+# (آزمودم: «/..%2fserver.py» → ۲۰۰ با کل کد منبع). پس allowlist روی مسیر
+# decode‌شده سنجیده می‌شود و هر چیز دیگر ۴۰۴ می‌گیرد؛ فهرست پوشه هم
+# خودبه‌خود بسته می‌شود چون هیچ مسیری به آن ختم نمی‌شود.
+STATIC_ALLOW=frozenset({'/','/index.html','/caregiver.html','/admin.html',
+                        '/investor.html','/sw.js','/manifest.webmanifest'})
 class Handler(SimpleHTTPRequestHandler):
  def __init__(self,*a,**kw):
   self._db=None
@@ -819,6 +830,8 @@ class Handler(SimpleHTTPRequestHandler):
    return send(self,200,{'profile':dict(prof) if prof else {},'medications':meds,'open_alerts':alerts,'last_vital':dict(vit) if vit else None,'tasks':rows(c,"SELECT * FROM care_tasks WHERE status!='done' ORDER BY due_at"),'symptoms':rows(c,'SELECT * FROM symptom_reports ORDER BY created_at DESC LIMIT 10'),'pending_actions':[a for a in rows(c,'SELECT * FROM caregiver_actions ORDER BY requested_at DESC LIMIT 50') if a['status']=='pending'],'screen_tasks':screen,'screen_control_shared':screen is not None,'checked_at':now()})
   if p=='/api/alerts': return send(self,200,{'items':rows(c,'SELECT * FROM alerts ORDER BY created_at DESC LIMIT 50')})
   if p=='/api/events': return send(self,200,{'items':rows(c,'SELECT * FROM events ORDER BY created_at DESC LIMIT 100')})
+  if unquote(p,errors='surrogateescape') not in STATIC_ALLOW:
+   return send(self,404,{'error':'not_found'})
   return super().do_GET()
  def do_POST(self):
   # پوشش کامل: بخشی از زنجیرهٔ مسیرها بیرون از try داخلی است و هر خطای نوع/تبدیل

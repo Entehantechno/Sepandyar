@@ -1104,6 +1104,7 @@ check('کنترل: هشدار نوع دیگر مستقل ساخته می‌شو�
       _m14.open_alert_once(_cc,'type_a','m') is not None and _m14.open_alert_once(_cc,'type_b','m') is not None)
 check('کنترل: هشدار بازِ تکراری ساخته نمی‌شود',
       _m14.open_alert_once(_cc,'type_a','m') is None)
+_cc.commit()   # وگرنه تراکنش باز قفل نوشتن را نگه می‌دارد و اتصال بعدی قفل می‌شود
 _c=sqlite3.connect(_m14.DB); _c.execute("UPDATE alerts SET status='resolved' WHERE type='type_a'"); _c.commit(); _c.close()
 check('کنترل: پس از بسته‌شدن هشدار، دوباره ساخته می‌شود',
       _m14.open_alert_once(_cc,'type_a','m') is not None)
@@ -1113,6 +1114,69 @@ _cc.close()
 _c=sqlite3.connect(_m14.DB)
 for _t in ['alerts','vitals','proactive_events','caregiver_actions']: _c.execute('DELETE FROM '+_t)
 _c.commit(); _c.close()
+# آزمون رفتاری race ذاتاً احتمالی است — در باگ‌یابی دور دهم یک بار روی
+# کد باگ‌دار هم قبول شد. پس الگوی تصاحب اتمیک را قطعی هم می‌سنجیم تا
+# رگرسیون بی‌صدا رد نشود.
+_srv17=open(os.path.join(ROOT,'server.py'),encoding='utf-8').read()
+check('الگو: هشدار با INSERT شرطی اتمیک ساخته می‌شود',
+      'INSERT INTO alerts(id,type,message,severity,status,created_at) SELECT' in _srv17
+      and 'WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE type=?' in _srv17)
+check('الگو: پرامپت با INSERT شرطی اتمیک ساخته می‌شود',
+      'INSERT INTO proactive_events(id,kind,prompt_date,delivered_at,response,responded_at,escalated_at) SELECT' in _srv17
+      and 'WHERE NOT EXISTS (SELECT 1 FROM proactive_events WHERE kind=? AND prompt_date=?)' in _srv17)
+check('الگو: نتیجهٔ تصاحب با rowcount سنجیده می‌شود',
+      _srv17.count('cur.rowcount') >= 3, _srv17.count('cur.rowcount'))
+_legacy_alerts = 'SELECT 1 FROM alerts WHERE type=? AND status=\'open\'",(sig,)).fetchone(): continue'
+_legacy_prompts = "and not c.execute('SELECT 1 FROM proactive_events WHERE kind=? AND prompt_date=?')"
+check('الگو: select-then-insert قدیمی در این دو تابع نمانده',
+      _legacy_alerts not in _srv17 and _legacy_prompts not in _srv17)
+
+
+# ---------------------------------------------------------------- بخش ۱۸
+# باگ‌یابی دور دهم: نشتی پرونده. Handler از SimpleHTTPRequestHandler ارث
+# می‌برد و _get در انتها به super().do_GET() می‌رسید، یعنی هر پروندهٔ زیر
+# ROOT سرو می‌شد. اندازه‌گیری واقعی پیش از رفع:
+#   /sepandyar.db        → ۲۰۰، ۴۱۷۷۹۲ بایت (کل پایگاه‌دادهٔ سلامت سالمند)
+#   /server.py           → ۲۰۰، ۱۲۵۹۷۱ بایت (کل کد منبع بک‌اند)
+#   /test_deployment.py  → ۲۰۰،  ۷۵۸۳۵ بایت
+#   /docs/ /uploads/ /production/ /android/ → ۲۰۰ فهرست پوشه
+# ریسرچ تأیید کرد blocklist با percent-encoding دور زده می‌شود چون
+# SimpleHTTPRequestHandler مسیر را پیش از نگاشت به دیسک decode می‌کند؛
+# آزمودم «/..%2fserver.py» → ۲۰۰ با کل کد منبع. پس رفع allowlist روی
+# مسیر decode‌شده است.
+print()
+print('۱۸) allowlist سرو پروندهٔ استاتیک (باگ‌یابی دور دهم)')
+for _path,_label in [('/sepandyar.db','پایگاه‌دادهٔ سلامت'),
+                     ('/server.py','کد منبع بک‌اند'),
+                     ('/test_deployment.py','مجموعهٔ آزمون'),
+                     ('/test_mvp.py','مجموعهٔ آزمون'),
+                     ('/api-contract.json','قرارداد API'),
+                     ('/..%2fserver.py','رمزگذاری percent'),
+                     ('/%2e%2e/server.py','رمزگذاری نقطه'),
+                     ('/..%2fsepandyar.db','رمزگذاری پایگاه‌داده'),
+                     ('/docs/','فهرست پوشهٔ docs'),
+                     ('/uploads/','فهرست پوشهٔ uploads'),
+                     ('/production/','فهرست پوشهٔ production'),
+                     ('/android/','فهرست پوشهٔ android'),
+                     ('/index.html/','اسلش اضافه')]:
+    _st,_b=req(B14,_path)
+    _body=_b.get('_raw','') if isinstance(_b,dict) else ''
+    _leaked=_st==200 and ('CREATE TABLE' in _body or 'def db(' in _body or '<li>' in _body
+                          or 'SQLite format' in _body or 'Index of' in _body)
+    check('نشتی: '+_label+' → ۴۰۴',_st==404 and not _leaked,(_st,len(_body)))
+_st,_b=req(B14,'/')
+check('کارکرد: صفحهٔ اصلی سرو می‌شود',_st==200 and len(_b.get('_raw',''))>1000,(_st,))
+for _path,_label in [('/index.html','صفحهٔ سالمند'),('/caregiver.html','داشبورد مراقب'),
+                     ('/admin.html','پنل ادمین'),('/investor.html','صفحهٔ سرمایه‌گذار'),
+                     ('/sw.js','service worker'),('/manifest.webmanifest','مانیفست')]:
+    _st,_b=req(B14,_path)
+    # مانیفست JSON معتبر است و req() تجزیه‌اش می‌کند، پس _raw خالی می‌ماند؛
+    # برای آن به کلیدهای تجزیه‌شده نگاه می‌کنیم.
+    _ok = _st==200 and (len(_b.get('_raw',''))>100 if isinstance(_b,dict) and '_raw' in _b
+                        else (isinstance(_b,dict) and len(_b)>0))
+    check('کارکرد: '+_label+' سرو می‌شود',_ok,(_st,list(_b)[:4] if isinstance(_b,dict) else _b))
+check('allowlist روی مسیر decode‌شده سنجیده می‌شود',
+      'unquote(p,errors=' in open(os.path.join(ROOT,'server.py'),encoding='utf-8').read())
 
 _srv14.shutdown(); _srv14.server_close()
 
