@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 sepandyar-stage*.zip
+*.db-wal
+*.db-shm

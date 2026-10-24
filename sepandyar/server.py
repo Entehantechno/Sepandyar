@@ -10,6 +10,14 @@ def db(h=None):
  # اتصال روی هندلر ثبت می‌شود تا در پایان درخواست بسته شود؛
  # وگرنه خطای وسط تراکنش، قفل نوشتن را رها می‌کند و کل پایگاه‌داده قفل می‌شود
  c=sqlite3.connect(DB,timeout=15); c.row_factory=sqlite3.Row
+ # پایانهٔ PRAGMA عملکردی. ترتیب مهم است: نخست journal_mode، بعد دوام، بعد حافظهٔ نهان.
+ # journal_mode در سرآیند «فایل» پایگاه‌داده نوشته می‌شود و پایاست؛ بقیه اتصال‌محورند و
+ # در هر اتصال نو به مقدار پیش‌فرض برمی‌گردند، پس باید هر بار تنظیم شوند.
+ # cache_size عمداً کوچک‌تر از توصیهٔ رایج ۶۴MB است: آن عدد برای pool اتصال نوشته شده،
+ # ولی این سرور به‌ازای «هر درخواست» یک اتصال می‌گشاید و سقف حافظه در همزمانی ضرب می‌شود.
+ c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA synchronous=NORMAL')
+ c.execute('PRAGMA busy_timeout=15000'); c.execute('PRAGMA cache_size=-8000')
+ c.execute('PRAGMA temp_store=MEMORY')
  if h is not None: h._db=c
  c.executescript('''CREATE TABLE IF NOT EXISTS profile(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT,age INTEGER,needs TEXT,assistant_name TEXT,updated_at TEXT);
  CREATE TABLE IF NOT EXISTS caregivers(id TEXT PRIMARY KEY,name TEXT,phone TEXT,role TEXT,permissions TEXT,created_at TEXT);
@@ -56,7 +64,20 @@ def db(h=None):
  CREATE TABLE IF NOT EXISTS conversation_turns(id TEXT PRIMARY KEY,profile_id TEXT,role TEXT,content TEXT,intent TEXT,flagged INTEGER DEFAULT 0,created_at TEXT);
  CREATE INDEX IF NOT EXISTS ix_turns_profile ON conversation_turns(profile_id,created_at);
  CREATE TABLE IF NOT EXISTS prescriptions(id TEXT PRIMARY KEY,image_ref TEXT,source TEXT,status TEXT,notes TEXT,created_at TEXT,UNIQUE(image_ref));
- CREATE TABLE IF NOT EXISTS prescription_items(id TEXT PRIMARY KEY,prescription_id TEXT,name TEXT,dose TEXT,schedule TEXT,confirmed INTEGER DEFAULT 0,medication_id TEXT,created_at TEXT);''')
+ CREATE TABLE IF NOT EXISTS prescription_items(id TEXT PRIMARY KEY,prescription_id TEXT,name TEXT,dose TEXT,schedule TEXT,confirmed INTEGER DEFAULT 0,medication_id TEXT,created_at TEXT);
+ -- ایندکس‌ها فقط روی مسیرهای داغی که واقعاً در این فایل پرس‌وجو می‌شوند.
+ -- سهم token در shares و caregiver_sessions «عمداً» ایندکس نگرفت: هر دو PRIMARY KEY
+ -- هستند و ایندکس دوم روی آن‌ها فقط نوشتن را کندتر و فایل را بزرگ‌تر می‌کرد.
+ -- reminder_date و log_date لازم‌اند چون ایندکس UNIQUE موجود با medication_id شروع
+ -- می‌شود و پرس‌وجوی «فقط بر پایهٔ تاریخ» نمی‌تواند از آن استفاده کند.
+ CREATE INDEX IF NOT EXISTS ix_vitals_measured ON vitals(measured_at);
+ CREATE INDEX IF NOT EXISTS ix_alerts_status_created ON alerts(status,created_at);
+ CREATE INDEX IF NOT EXISTS ix_actions_requested ON caregiver_actions(requested_at);
+ CREATE INDEX IF NOT EXISTS ix_transactions_created ON transactions(created_at);
+ CREATE INDEX IF NOT EXISTS ix_messages_created ON messages(created_at);
+ CREATE INDEX IF NOT EXISTS ix_locations_created ON locations(created_at);
+ CREATE INDEX IF NOT EXISTS ix_reminder_events_date ON reminder_events(reminder_date);
+ CREATE INDEX IF NOT EXISTS ix_medication_logs_date ON medication_logs(log_date);;''')
  defaults=[('systolic','90','140','80','180'),('diastolic','60','90','50','120'),('glucose','70','180','54','300'),('weight','0','1000','0','1000')]
  for t,nmin,nmax,cmin,cmax in defaults: c.execute('INSERT OR IGNORE INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?)',(t,nmin,nmax,cmin,cmax,'system',now()))
  pecols=[x[1] for x in c.execute('PRAGMA table_info(proactive_events)').fetchall()]
@@ -671,6 +692,29 @@ def primary_caregiver(c):
 # خودبه‌خود بسته می‌شود چون هیچ مسیری به آن ختم نمی‌شود.
 STATIC_ALLOW=frozenset({'/','/index.html','/caregiver.html','/admin.html',
                         '/investor.html','/sw.js','/manifest.webmanifest'})
+# --- سرآیندهای امنیتی: روی «هر» پاسخ ---
+# اندازه‌گیری پیش از این تغییر: از هفت سرآیند توصیه‌شده، صفر مورد ارسال می‌شد.
+# CSP: اسکریپت درون‌خطی عمداً مجاز مانده چون این UI هیچ فریم‌ورکی ندارد و ۱۱۷ هندلر
+# onclick در index.html و ۱۲ مورد در caregiver.html دارد؛ nonce و hash هندلر درون‌خطی
+# رویداد را پوشش نمی‌دهند، پس script-src سخت کل اپ را از کار می‌انداخت. آنچه این سیاست
+# همچنان می‌بندد: هر مبدأ اسکریپت بیرونی، object/embed، ربودن <base>، قاب‌گیری
+# (clickjacking) و برون‌بری داده به مبدأ نامعلوم.
+CSP=("default-src 'self'; "
+ "script-src 'self' 'unsafe-inline'; "
+ "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+ "font-src 'self' https://fonts.gstatic.com data:; "
+ "img-src 'self' data: blob: https:; "
+ "connect-src 'self' https://api.openai.com; "
+ "media-src 'self' blob:; "
+ "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+SECURITY_HEADERS=(('Content-Security-Policy',CSP),
+ ('X-Content-Type-Options','nosniff'),
+ ('X-Frame-Options','DENY'),
+ ('Referrer-Policy','strict-origin-when-cross-origin'),
+ # microphone و geolocation عمداً بسته «نشده»اند: getUserMedia در index.html و
+ # getCurrentPosition در caregiver.html استفاده می‌شوند. قاعدهٔ پژوهش هم همان است:
+ # فقط قابلیتی را ببند که استفاده نمی‌کنی.
+ ('Permissions-Policy','camera=(), payment=(), usb=(), magnetometer=(), bluetooth=(), display-capture=(), interest-cohort=()'))
 class Handler(SimpleHTTPRequestHandler):
  # تایم‌اوت سوکت، وگرنه هر اتصال نیمه‌باز یک رشته را برای همیشه نگه می‌دارد.
  # timeout در زنجیرهٔ ارث None است و StreamRequestHandler.setup() فقط وقتی آن
@@ -683,6 +727,21 @@ class Handler(SimpleHTTPRequestHandler):
  # ۳۰ ثانیه با فاصلهٔ امن بالای کُندترین مسیر مشروع است (پروکسی Gemini
  # تایم‌اوت ۱۵ ثانیه دارد).
  timeout=30
+ # تنها نقطهٔ گلوگاهی مشترک «همهٔ» پاسخ‌ها: send() برای JSON، send_error() برای خطاها،
+ # و send_head() ارثی برای فایل‌های ایستا همگی از end_headers می‌گذرند؛ پس هیچ مسیری
+ # جا نمی‌ماند. (همان درسی که در دور یازدهم از do_HEAD گرفتیم: گلوگاه را پایین بگیر.)
+ #
+ # Strict-Transport-Security (HSTS) عمداً «نیامده»: RFC 6797 می‌گوید این سرآیند فقط باید روی HTTPS فرستاده شود و
+ # این سرور HTTP ساده است. پشت پروکسی TLS باید همان‌جا اضافه شود، نه اینجا.
+ def end_headers(self):
+  for k,v in SECURITY_HEADERS: self.send_header(k,v)
+  # دادهٔ سلامت هرگز نباید در حافظهٔ نهان بنشیند؛ پوستهٔ اپ و service worker باید
+  # بازاعتبارسنجی شوند تا پس از انتشار، نسخهٔ کهنه روی دستگاه سالمند نماند.
+  # self.path در مسیرهای خطای parse_request ممکن است هنوز تنظیم نشده باشد.
+  p=(getattr(self,'path','') or '').split('?',1)[0]
+  if p.startswith('/api/') or p.startswith('/share/'): self.send_header('Cache-Control','no-store')
+  elif p in ('/','/index.html','/caregiver.html','/admin.html','/investor.html','/sw.js','/manifest.webmanifest'): self.send_header('Cache-Control','no-cache')
+  super().end_headers()
  def __init__(self,*a,**kw):
   self._db=None
   try: super().__init__(*a,directory=ROOT,**kw)

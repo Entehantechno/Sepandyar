@@ -1202,11 +1202,14 @@ for _p, _lbl in [('/sepandyar.db', 'پایگاه‌دادهٔ سلامت'), ('/s
                  ('/..%2fserver.py', 'رمزگذاری percent'), ('/%2e%2e/server.py', 'رمزگذاری نقطه')]:
     _s, _cl, _d = _raw19('HEAD', _p)
     check('HEAD نشتی نمی‌دهد: ' + _lbl, _s == 404, (_s, _cl))
-for _p, _sz in [('/', 117516), ('/index.html', 117516), ('/caregiver.html', 14517),
-                ('/admin.html', 12116), ('/investor.html', 6907), ('/sw.js', 1593),
-                ('/manifest.webmanifest', 351)]:
+# اندازه‌ها عمداً از دیسک خوانده می‌شوند نه سخت‌کد: خواصِ آزموده‌شده این است که HEAD
+# «طول واقعی فایل» را گزارش می‌کند. عدد ثابت با هر تغییر مشروع UI فاسد می‌شد.
+for _p, _fn in [('/', 'index.html'), ('/index.html', 'index.html'), ('/caregiver.html', 'caregiver.html'),
+                ('/admin.html', 'admin.html'), ('/investor.html', 'investor.html'), ('/sw.js', 'sw.js'),
+                ('/manifest.webmanifest', 'manifest.webmanifest')]:
+    _sz = os.path.getsize(os.path.join(ROOT, _fn))
     _s, _cl, _d = _raw19('HEAD', _p)
-    check('HEAD دارایی مجاز سالم است: ' + _p, _s == 200 and _cl == str(_sz), (_s, _cl))
+    check('HEAD دارایی مجاز سالم است: ' + _p, _s == 200 and _cl == str(_sz), (_s, _cl, _sz))
 check('دروازه در send_head است نه فقط در _get', 'def send_head(self):' in srvsrc)
 
 # ۲) کلید تکرارناپذیری باید به عملیات مقید باشد، وگرنه کلیدِ یک شارژ پرداخت را
@@ -1356,6 +1359,105 @@ check('کمکی escape تعریف شده و به کار رفته',
 check('ماژول html وارد شده', ', html,' in srvsrc)
 
 _srv14.shutdown(); _srv14.server_close()
+
+# ===================== بخش ۲۱: سرآیندهای امنیتی، PRAGMA عملکردی، ایندکس و دسترسی‌پذیری WCAG 2.2 =====================
+# ممیزی پیش از این تغییر: از هفت سرآیند امنیتی توصیه‌شده «صفر» مورد ارسال می‌شد، هیچ
+# PRAGMA عملکردی وجود نداشت، و در برابر ۴۵ جدول فقط «یک» ایندکس بود.
+print()
+print('--- بخش ۲۱: سرآیندهای امنیتی / عملکرد SQLite / دسترسی‌پذیری ---')
+
+_s21=ThreadingHTTPServer(('127.0.0.1',0),_m14.Handler)
+threading.Thread(target=_s21.serve_forever,daemon=True).start()
+B21='http://127.0.0.1:%d'%_s21.server_address[1]
+import html.parser as _hp
+def _headers(base,path):
+    """سرآیندهای خام یک پاسخ را به‌صورت «لیست» برمی‌گرداند تا سرآیند تکراری هم دیده شود."""
+    u=urlparse(base); c=http.client.HTTPConnection(u.hostname,u.port,timeout=30)
+    c.request('GET',path); r=c.getresponse(); r.read()
+    hs=[(k.lower(),v) for k,v in r.getheaders()]; c.close(); return r.status,hs
+def _h(hs,name): return [v for k,v in hs if k==name.lower()]
+
+_api=_headers(B21,'/api/health'); _st=_headers(B21,'/index.html'); _nf=_headers(B21,'/api/definitely-missing')
+for _lbl,(_code,_hs) in [('API',_api),('ایستا',_st),('۴۰۴',_nf)]:
+    # ۴۰۴ عمداً سنجیده می‌شود: اگر end_headers گلوگاه واقعی نباشد، مسیر خطا بی‌سرآیند می‌ماند.
+    check('بخش۲۱ CSP روی پاسخ '+_lbl, len(_h(_hs,'Content-Security-Policy'))==1, _hs)
+    check('بخش۲۱ nosniff روی پاسخ '+_lbl, _h(_hs,'X-Content-Type-Options')==['nosniff'], _hs)
+    check('بخش۲۱ X-Frame-Options روی پاسخ '+_lbl, _h(_hs,'X-Frame-Options')==['DENY'], _hs)
+    check('بخش۲۱ Referrer-Policy روی پاسخ '+_lbl, _h(_hs,'Referrer-Policy')==['strict-origin-when-cross-origin'], _hs)
+    check('بخش۲۱ Permissions-Policy روی پاسخ '+_lbl, len(_h(_hs,'Permissions-Policy'))==1, _hs)
+
+_pp=(_h(_api[1],'Permissions-Policy') or [''])[0]
+# قابلیت‌هایی که اپ «واقعاً» استفاده می‌کند نباید بسته شوند، وگرنه صدای سالمند و
+# موقعیت مکانی مراقب از کار می‌افتد. این سه بررسی جلوی «بستن کورکورانه» را می‌گیرند.
+check('بخش۲۱ microphone بسته نشده (getUserMedia در index.html)', 'microphone=()' not in _pp, _pp)
+check('بخش۲۱ geolocation بسته نشده (getCurrentPosition در caregiver.html)', 'geolocation=()' not in _pp, _pp)
+check('بخش۲۱ camera بسته شده (استفاده نمی‌شود)', 'camera=()' in _pp, _pp)
+
+_csp=(_h(_api[1],'Content-Security-Policy') or [''])[0]
+for _d in ["frame-ancestors 'none'","object-src 'none'","base-uri 'none'","form-action 'self'"]:
+    check('بخش۲۱ CSP شامل '+_d, _d in _csp, _csp)
+
+# HSTS عمداً نیامده: RFC 6797 می‌گوید فقط روی HTTPS. نبودنش باید «تصمیم مستند» بماند،
+# نه اینکه کسی بعداً تصادفی اضافه‌اش کند یا تصادفی حذف شود.
+check('بخش۲۱ HSTS ارسال نمی‌شود (سرور HTTP ساده است)', _h(_api[1],'Strict-Transport-Security')==[], _api[1])
+check('بخش۲۱ نبودِ HSTS در متن کد مستند شده', 'Strict-Transport-Security' in srvsrc and 'RFC 6797' in srvsrc)
+
+check('بخش۲۱ Cache-Control: no-store روی /api/ (دادهٔ سلامت)', _h(_api[1],'Cache-Control')==['no-store'], _api[1])
+check('بخش۲۱ Cache-Control: no-cache روی پوستهٔ اپ', _h(_st[1],'Cache-Control')==['no-cache'], _st[1])
+check('بخش۲۱ Cache-Control تکراری ارسال نمی‌شود', len(_h(_api[1],'Cache-Control'))==1 and len(_h(_st[1],'Cache-Control'))==1)
+
+# --- PRAGMA ها: باید روی اتصال واقعی db() سنجیده شوند، نه یک اتصال تازه ---
+_pc=_m14.db()
+for _p,_exp in [('journal_mode','wal'),('synchronous',1),('busy_timeout',15000),('cache_size',-8000),('temp_store',2)]:
+    _got=_pc.execute('PRAGMA '+_p).fetchone()[0]
+    check('بخش۲۱ PRAGMA %s == %r'%(_p,_exp), _got==_exp, 'به‌دست‌آمده: %r'%(_got,))
+check('بخش۲۱ فایل -wal واقعاً ساخته می‌شود', os.path.exists(_m14.DB+'-wal') or _pc.execute('PRAGMA journal_mode').fetchone()[0]=='wal')
+# پژوهش: PRAGMA ها باید «پیش از هر BEGIN/کوئری» اعمال شوند؛ اگر بعد از executescript باشند بی‌اثرند.
+_q3=chr(39)*3
+_i_j=srvsrc.find(chr(80)+"RAGMA journal_mode"); _i_s=srvsrc.find("c.executescript("+_q3+"CREATE TABLE")
+check('بخش۲۱ PRAGMA در متن کد پیدا می‌شود', _i_j>=0 and _i_s>=0, (_i_j,_i_s))
+check('بخش۲۱ PRAGMA ها پیش از executescript اسکیم اجرا می‌شوند', 0<=_i_j<_i_s, (_i_j,_i_s))
+
+# --- ایندکس‌ها: وجودشان کافی نیست؛ باید در «نقشهٔ اجرا» هم دیده شوند ---
+_need=['ix_vitals_measured','ix_alerts_status_created','ix_actions_requested','ix_transactions_created',
+       'ix_messages_created','ix_locations_created','ix_reminder_events_date','ix_medication_logs_date']
+_have={r[0] for r in _pc.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+check('بخش۲۱ هر ۸ ایندکس نو ساخته شده‌اند', all(n in _have for n in _need), sorted(set(_need)-_have))
+for _q,_ix in [("SELECT * FROM vitals ORDER BY measured_at DESC LIMIT 5",'ix_vitals_measured'),
+               ("SELECT * FROM alerts WHERE status='open' ORDER BY created_at DESC",'ix_alerts_status_created'),
+               ("SELECT * FROM reminder_events WHERE reminder_date='x'",'ix_reminder_events_date'),
+               ("SELECT * FROM caregiver_actions ORDER BY requested_at DESC LIMIT 5",'ix_actions_requested')]:
+    _plan=' | '.join(x[3] for x in _pc.execute('EXPLAIN QUERY PLAN '+_q))
+    check('بخش۲۱ نقشهٔ اجرا از %s استفاده می‌کند'%_ix, _ix in _plan, _plan)
+# سهم token در این دو جدول PRIMARY KEY است؛ ایندکس دوم فقط نوشتن را کندتر می‌کرد.
+check('بخش۲۱ ایندکس زائد روی shares(token) ساخته نشده', not any(n.startswith('ix_shares') for n in _have), sorted(_have))
+check('بخش۲۱ ایندکس زائد روی caregiver_sessions(token) ساخته نشده', not any(n.startswith('ix_sessions') for n in _have), sorted(_have))
+_pc.close()
+
+# --- دسترسی‌پذیری WCAG 2.2: پیمایش واقعی DOM در ترتیب سند، نه grep ---
+class _FP(_hp.HTMLParser):
+    """نخستین عنصر فوکوس‌پذیر در ترتیب سند را پیدا می‌کند (معیار واقعی SC 2.4.1)."""
+    def __init__(s2): super().__init__(); s2.first=None; s2.main=None
+    def handle_starttag(s2,tag,attrs):
+        a=dict(attrs)
+        if s2.first is None and (tag in ('button','input','select','textarea')
+            or (tag=='a' and a.get('href') is not None)
+            or (a.get('tabindex') not in (None,'-1'))): s2.first=(tag,a)
+        if tag=='main': s2.main=a
+for _f in ['index.html','caregiver.html','admin.html']:
+    _t=open(os.path.join(ROOT,_f),encoding='utf-8').read()
+    _p=_FP(); _p.feed(_t)
+    check('بخش۲۱ %s: نخستین عنصر فوکوس‌پذیر = پیوند پرش'%_f,
+          _p.first is not None and _p.first[1].get('class')=='skip-link' and _p.first[1].get('href')=='#main', _p.first)
+    check('بخش۲۱ %s: <main> بومی با tabindex="-1"'%_f, _p.main is not None and _p.main.get('tabindex')=='-1', _p.main)
+    check('بخش۲۱ %s: prefers-contrast:more دارد'%_f, '@media (prefers-contrast:more)' in _t)
+    check('بخش۲۱ %s: حلقهٔ فوکوس ≥۲px (WCAG 2.4.13)'%_f, ':focus-visible{outline:3px' in _t)
+    check('بخش۲۱ %s: پیوند پرش با display:none پنهان نشده'%_f, 'skip-link{position:absolute' in _t and 'skip-link{display:none' not in _t)
+_a=open(os.path.join(ROOT,'index.html'),'rb').read()
+_b=os.path.join(ROOT,'android','app','src','main','assets','index.html')
+check('بخش۲۱ نسخهٔ assets اندروید بایت‌به‌بایت یکسان است', not os.path.exists(_b) or open(_b,'rb').read()==_a)
+
+_s21.shutdown(); _s21.server_close()
 
 print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
