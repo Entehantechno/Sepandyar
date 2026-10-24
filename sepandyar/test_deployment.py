@@ -972,6 +972,76 @@ check('همزمانی: UPDATE تصاحب شرط escalated_at IS NULL دارد',
       'WHERE id=? AND escalated_at IS NULL' in srvsrc)
 _c15.close()
 
+# ---------------------------------------------------------------- بخش ۱۶
+# باگ‌یابی دور هشتم: سه باگ از یک خانواده — «مقدار بی‌اعتبارسنجی نوشته می‌شود
+# و خواننده‌اش بعداً می‌شکند». دو تای اول کرش پایدار بودند: یک نوشتن بد،
+# اندپوینت هسته‌ای را برای همیشه از کار می‌انداخت.
+# ۱) /api/reminder-settings برای quiet_start/quiet_end هیچ اعتبارسنجی نداشت؛
+#    مقدار خام ذخیره می‌شد و in_quiet_window با strptime می‌شکست
+#    → GET /api/reminders/due برای همیشه ۵۰۰.
+# ۲) /api/vitals/thresholds با str(None) رشتهٔ 'None' ذخیره می‌کرد و
+#    float('None') در evaluate_vital می‌شکست → POST /api/vitals برای همیشه ۵۰۰.
+# ۳) max_nudges ذخیره و اعتبارسنجی می‌شد ولی هیچ‌جا خوانده نمی‌شد (تنظیم مرده).
+print()
+print('۱۶) اعتبارسنجی در مرز ورودی (باگ‌یابی دور هشتم)')
+for _v in ['بد','25:99','','99:99',None,123,'22:00:00',{'a':1}]:
+    _st,_r=req(B14,'/api/reminder-settings','POST',{'quiet_start':_v,'quiet_end':'07:00','max_nudges':2})
+    check('ساعت سکوت: quiet_start=%r → ۴۰۰ نه ذخیره'%(str(_v)[:12]),
+          _st==400 and _r.get('error')=='invalid_quiet_hours',(_st,_r))
+_st,_r=req(B14,'/api/reminder-settings','POST',{'quiet_start':'22:00','quiet_end':'07:00','max_nudges':2})
+check('ساعت سکوت: مقدار معتبر HH:MM پذیرفته می‌شود',_st==200,(_st,_r))
+for _n in [-5,11,999]:
+    _st,_r=req(B14,'/api/reminder-settings','POST',{'quiet_start':'22:00','quiet_end':'07:00','max_nudges':_n})
+    check('ساعت سکوت: max_nudges=%r خارج از بازه → ۴۰۰'%_n,_st==400,(_st,_r))
+_st,_r=req(B14,'/api/reminders/due')
+check('ساعت سکوت: اندپوینت یادآور پس از تلاش‌های بد سالم می‌ماند',_st==200,(_st,_r))
+
+for _nm,_items in [('null',[{'type':'systolic','normal_min':None,'normal_max':140,'critical_min':80,'critical_max':180}]),
+                   ('رشته',[{'type':'systolic','normal_min':'بد','normal_max':140,'critical_min':80,'critical_max':180}]),
+                   ('خالی',[{'type':'systolic','normal_min':'','normal_max':'','critical_min':'','critical_max':''}]),
+                   ('وارونه',[{'type':'systolic','normal_min':200,'normal_max':80,'critical_min':80,'critical_max':180}]),
+                   ('قلم غیرشیء',['x'])]:
+    _st,_r=req(B14,'/api/vitals/thresholds','POST',{'items':_items})
+    check('آستانه: %s → ۴۰۰ نه ذخیرهٔ زباله'%_nm,_st==400,(_st,_r))
+_st,_r=req(B14,'/api/vitals/thresholds','POST',{'items':'notalist'})
+check('آستانه: items غیرفهرست → ۴۰۰',_st==400,(_st,_r))
+_st,_r=req(B14,'/api/vitals/thresholds','POST',
+           {'items':[{'type':'systolic','normal_min':90,'normal_max':140,'critical_min':80,'critical_max':180}]})
+check('آستانه: مقدار معتبر پذیرفته می‌شود',_st==200,(_st,_r))
+_st,_r=req(B14,'/api/vitals','POST',{'type':'blood_pressure','value':{'systolic':128,'diastolic':82}})
+check('آستانه: ثبت علامت حیاتی پس از آن کار می‌کند',_st==201,(_st,_r))
+
+# --- لایهٔ دوم دفاع: دادهٔ خرابی که پیش از رفع در پایگاه‌داده نشسته
+# نباید اندپوینت هسته‌ای را از کار بیندازد. مستقیم و بی‌گذر از اعتبارسنجی
+# مرز نوشته می‌شود تا وضعیت پایگاه‌دادهٔ قدیمی بازسازی شود.
+_c16=sqlite3.connect(_m14.DB)
+_c16.execute("UPDATE reminder_settings SET quiet_start='x',quiet_end='y' WHERE id=1"); _c16.commit()
+_st,_r=req(B14,'/api/reminders/due')
+check('تاب‌آوری: ساعت سکوت خراب در پایگاه‌داده → ۵۰۰ نمی‌دهد',_st==200,(_st,_r))
+check('تاب‌آوری: ساعت سکوت خراب به «بدون سکوت» برمی‌گردد',_r.get('quiet_hours') is False,_r.get('quiet_hours'))
+_c16.execute("UPDATE vital_thresholds SET normal_min='None',critical_min='None' WHERE type='systolic'"); _c16.commit()
+_st,_r=req(B14,'/api/vitals','POST',{'type':'blood_pressure','value':{'systolic':128,'diastolic':82}})
+check('تاب‌آوری: آستانهٔ خراب در پایگاه‌داده → ۵۰۰ نمی‌دهد',_st==201,(_st,_r))
+_c16.execute("UPDATE reminder_settings SET quiet_start='22:00',quiet_end='07:00' WHERE id=1")
+_c16.execute("UPDATE vital_thresholds SET normal_min='90',normal_max='140',critical_min='80',critical_max='180' WHERE type='systolic'")
+_c16.commit(); _c16.close()
+
+# --- max_nudges دیگر مرده نیست: دست‌کم صفر واقعاً یادآوری را خاموش می‌کند
+_c16=sqlite3.connect(_m14.DB)
+for _t in ['reminder_events','medications','medication_logs']: _c16.execute('DELETE FROM '+_t)
+_c16.commit(); _c16.close()
+_hh=datetime.datetime.now().strftime('%H:%M')
+req(B14,'/api/medications','POST',{'name':'داروی آزمون ۱۶','time':_hh,'instructions':'x'})
+for _n,_want in [(0,0),(2,1)]:
+    req(B14,'/api/reminder-settings','POST',{'quiet_start':'00:00','quiet_end':'00:01','max_nudges':_n})
+    _c16=sqlite3.connect(_m14.DB); _c16.execute('DELETE FROM reminder_events'); _c16.commit(); _c16.close()
+    for _ in range(4): req(B14,'/api/reminders/due')
+    _c16=sqlite3.connect(_m14.DB)
+    _got=_c16.execute('SELECT COUNT(*) FROM reminder_events').fetchone()[0]
+    _c16.execute("UPDATE reminder_settings SET quiet_start='22:00',quiet_end='07:00' WHERE id=1"); _c16.commit(); _c16.close()
+    check('max_nudges=%d → %d یادآوری (تنظیم مرده نیست)'%(_n,_want),_got==_want,(_got,_want))
+req(B14,'/api/reminder-settings','POST',{'quiet_start':'22:00','quiet_end':'07:00','max_nudges':2})
+
 _srv14.shutdown(); _srv14.server_close()
 
 print()

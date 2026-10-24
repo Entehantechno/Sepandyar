@@ -192,7 +192,11 @@ def evaluate_vital(c,kind,value):
   if v is None: continue
   r=c.execute('SELECT * FROM vital_thresholds WHERE type=?',(t,)).fetchone()
   if not r: continue
-  normal=float(r['normal_min'])<=v<=float(r['normal_max']); severe=v<float(r['critical_min']) or v>float(r['critical_max'])
+  # آستانه‌ها در ستون TEXT نگه داشته می‌شوند؛ اگر مقدارشان عدد نباشد
+  # float() با ValueError کل ثبت علامت حیاتی را ۵۰۰ می‌کرد.
+  try: nmin=float(r['normal_min']); nmax=float(r['normal_max']); cmin=float(r['critical_min']); cmax=float(r['critical_max'])
+  except (TypeError,ValueError): continue
+  normal=nmin<=v<=nmax; severe=v<cmin or v>cmax
   results.append({'type':t,'value':v,'status':'normal' if normal else ('critical' if severe else 'out_of_range'),'normal_min':r['normal_min'],'normal_max':r['normal_max']})
   abnormal|=not normal; critical|=severe
  if abnormal:
@@ -338,9 +342,21 @@ def detect_deviation_alerts(c,report=None):
   made.append(aid)
  c.commit(); return made
 
+def as_hhmm(v):
+ """مرز ورودی: HH:MM را تجزیه می‌کند و اگر معتبر نبود None می‌دهد.
+ پیش از این مقدار خام در پایگاه‌داده ذخیره می‌شد و خواننده‌اش با
+ strptime می‌شکست — یعنی یک نوشتن بد، اندپوینت را برای همیشه از کار می‌انداخت."""
+ if not isinstance(v,str): return None
+ try: datetime.datetime.strptime(v,'%H:%M')
+ except Exception: return None
+ return v
 def in_quiet_window(current,start,end):
  from datetime import datetime
- c=datetime.strptime(current,'%H:%M').time(); s=datetime.strptime(start,'%H:%M').time(); e=datetime.strptime(end,'%H:%M').time()
+ # دادهٔ کهنهٔ ناسالم نباید هستهٔ یادآور را از کار بیندازد؛ در آن حالت
+ # «ساعت سکوت نداریم» امن‌ترین پیش‌فرض است چون یادآوری را سرکوب نمی‌کند.
+ try:
+  c=datetime.strptime(current,'%H:%M').time(); s=datetime.strptime(start,'%H:%M').time(); e=datetime.strptime(end,'%H:%M').time()
+ except Exception: return False
  return (s<=c<e) if s<e else (c>=s or c<e)
 def distance_m(lat1,lon1,lat2,lon2):
  import math
@@ -658,9 +674,19 @@ class Handler(SimpleHTTPRequestHandler):
      try:
       mt=datetime.datetime.strptime(m['time'],'%H:%M'); ct=datetime.datetime.strptime(current,'%H:%M'); delta=abs((ct-mt).total_seconds())
       if delta<=900:
-       exists=c.execute('SELECT 1 FROM reminder_events WHERE medication_id=? AND reminder_date=? AND channel=?',(m['id'],today,settings['preferred_channel'] if settings else 'voice')).fetchone()
-       if not exists:
-        channel=settings['preferred_channel'] if settings else 'voice'; c.execute('INSERT INTO reminder_events VALUES(?,?,?,?,?)',(str(uuid.uuid4()),m['id'],today,channel,now())); due.append(dict(m))
+       channel=(settings['preferred_channel'] if settings else 'voice') or 'voice'
+       # max_nudges پیش از این ذخیره و اعتبارسنجی می‌شد ولی هیچ‌جا خوانده
+       # نمی‌شد؛ یعنی تنظیم سقف یادآوری کاملاً بی‌اثر بود. حالا خوانده می‌شود
+       # و دست‌کم max_nudges=0 واقعاً یادآوری را خاموش می‌کند.
+       # توجه: تکرار واقعی بیش از یک بار در روز نیاز به مهاجرت schema دارد،
+       # چون UNIQUE(medication_id,reminder_date,channel) در جدول reminder_events
+       # فقط یک ردیف به ازای هر دارو/روز/کانال اجازه می‌دهد.
+       try: maxn=int(settings['max_nudges']) if settings and settings['max_nudges'] is not None else 2
+       except (TypeError,ValueError): maxn=2
+       maxn=max(0,min(maxn,10))
+       sent=c.execute('SELECT COUNT(*) FROM reminder_events WHERE medication_id=? AND reminder_date=? AND channel=?',(m['id'],today,channel)).fetchone()[0]
+       if sent<maxn:
+        c.execute('INSERT INTO reminder_events VALUES(?,?,?,?,?)',(str(uuid.uuid4()),m['id'],today,channel,now())); due.append(dict(m))
      except: pass
     c.commit()
    return send(self,200,{'items':due,'checked_at':now(),'quiet_hours':quiet})
@@ -854,8 +880,11 @@ class Handler(SimpleHTTPRequestHandler):
    eid=d.get('id'); c.execute('UPDATE proactive_events SET response=?,responded_at=? WHERE id=?',(d.get('response',''),now(),eid)); c.commit(); return send(self,200,{'ok':True})
   if p=='/api/reminder-settings':
    nudges=as_int(d.get('max_nudges',2))
-   if nudges is None: return send(self,400,{'error':'invalid_max_nudges','message':'max_nudges باید عدد باشد.'})
-   c.execute('INSERT INTO reminder_settings(id,quiet_start,quiet_end,max_nudges,preferred_channel,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,max_nudges=excluded.max_nudges,preferred_channel=excluded.preferred_channel,updated_at=excluded.updated_at',(d.get('quiet_start','22:00'),d.get('quiet_end','07:00'),nudges,d.get('preferred_channel','voice'),now())); c.commit(); return send(self,200,{'ok':True})
+   if nudges is None or not 0<=nudges<=10: return send(self,400,{'error':'invalid_max_nudges','message':'max_nudges باید عددی بین ۰ و ۱۰ باشد.'})
+   qs=as_hhmm(d.get('quiet_start','22:00')); qe=as_hhmm(d.get('quiet_end','07:00'))
+   if qs is None or qe is None:
+    return send(self,400,{'error':'invalid_quiet_hours','message':'quiet_start و quiet_end باید به قالب HH:MM باشند.'})
+   c.execute('INSERT INTO reminder_settings(id,quiet_start,quiet_end,max_nudges,preferred_channel,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,max_nudges=excluded.max_nudges,preferred_channel=excluded.preferred_channel,updated_at=excluded.updated_at',(qs,qe,nudges,d.get('preferred_channel','voice'),now())); c.commit(); return send(self,200,{'ok':True,'quiet_start':qs,'quiet_end':qe,'max_nudges':nudges})
   if p=='/api/icope':
    domain=d.get('domain',''); score=as_float(d.get('score',0))
    # as_float روی ورودی غیرعددی None می‌دهد؛ 0<=None پیش‌تر TypeError و ۵۰۰ می‌داد
@@ -945,8 +974,25 @@ class Handler(SimpleHTTPRequestHandler):
    if edays is None: return send(self,400,{'error':'invalid_expires_days','message':'expires_days باید عدد باشد.'})
    days=max(1,min(edays,30)); token=uuid.uuid4().hex; expires=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=days)).isoformat(); c.execute('INSERT INTO shares VALUES(?,?,?,?,?)',(token,d.get('scope','vitals'),expires,0,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vitals_share_created',json.dumps({'expires_at':expires},ensure_ascii=False),now())); c.commit(); return send(self,201,{'token':token,'url':f'/share/{token}','expires_at':expires})
   if p=='/api/vitals/thresholds':
-   for item in d.get('items',[]):
-    c.execute('INSERT INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(type) DO UPDATE SET normal_min=excluded.normal_min,normal_max=excluded.normal_max,critical_min=excluded.critical_min,critical_max=excluded.critical_max,updated_by=excluded.updated_by,updated_at=excluded.updated_at',(item.get('type'),str(item.get('normal_min')),str(item.get('normal_max')),str(item.get('critical_min')),str(item.get('critical_max')),d.get('updated_by','caregiver'),now()))
+   items_in=d.get('items',[])
+   if not isinstance(items_in,list): return send(self,400,{'error':'invalid_thresholds','message':'items باید فهرست باشد.'})
+   # str(None) رشتهٔ 'None' ذخیره می‌کرد و float('None') بعداً ثبت علامت را
+   # برای همیشه ۵۰۰ می‌کرد. عدد بودن را همین‌جا در مرز تضمین می‌کنیم.
+   parsed=[]
+   for item in items_in:
+    if not isinstance(item,dict): return send(self,400,{'error':'invalid_threshold','message':'هر قلم آستانه باید شیء باشد.'})
+    t=as_text(item.get('type',''))
+    if not t: return send(self,400,{'error':'invalid_threshold','message':'type لازم است.'})
+    nums=[]
+    for k in ('normal_min','normal_max','critical_min','critical_max'):
+     n=as_float(item.get(k))
+     if n is None: return send(self,400,{'error':'invalid_threshold','message':'مقادیر آستانهٔ '+t+' باید عدد باشند.'})
+     nums.append(n)
+    if nums[0]>nums[1] or nums[2]>nums[3]:
+     return send(self,400,{'error':'inverted_threshold','message':'حد پایین آستانهٔ '+t+' نمی‌تواند از حد بالا بزرگ‌تر باشد.'})
+    parsed.append((t,nums))
+   for t,(nmin,nmax,cmin,cmax) in parsed:
+    c.execute('INSERT INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(type) DO UPDATE SET normal_min=excluded.normal_min,normal_max=excluded.normal_max,critical_min=excluded.critical_min,critical_max=excluded.critical_max,updated_by=excluded.updated_by,updated_at=excluded.updated_at',(t,str(nmin),str(nmax),str(cmin),str(cmax),d.get('updated_by','caregiver'),now()))
    c.commit(); return send(self,200,{'ok':True,'items':rows(c,'SELECT * FROM vital_thresholds ORDER BY type')})
   if p=='/api/vitals':
    kind=d.get('type','unknown'); value=d.get('value'); evaluation=evaluate_vital(c,kind,value)
