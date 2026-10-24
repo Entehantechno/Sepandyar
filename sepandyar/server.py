@@ -276,7 +276,11 @@ def escalate_stale_prompts(c):
   except Exception: continue
   if age<PROACTIVE_ESCALATE_MIN: continue
   prompt=next((t for k,_a,t in PROACTIVE_PROMPTS if k==r['kind']),r['kind'])
-  c.execute('UPDATE proactive_events SET escalated_at=? WHERE id=?',(now(),r['id']))
+  # تصاحب اتمیک: شرط «escalated_at IS NULL» درون خود UPDATE است و rowcount نتیجه را
+  # می‌گوید. پیش از این انتخاب و نوشتن دو مرحله بود و scheduler با درخواست همزمان
+  # هر دو رد می‌شدند — برای یک رویداد بی‌پاسخ، ۶ هشدار و ۶ کنش تکراری ساخته می‌شد.
+  cur=c.execute('UPDATE proactive_events SET escalated_at=? WHERE id=? AND escalated_at IS NULL',(now(),r['id']))
+  if not cur.rowcount: continue   # دیگری زودتر تصاحب کرد
   cg=primary_caregiver(c) or {}
   enqueue_caregiver_action(c,'call_request',{'phone':cg.get('phone',''),'caregiver':cg.get('name',''),'reason':'سالمند به یادآوری «'+prompt+'» پاسخ نداد.'})
   open_alert(c,'proactive_no_response','یادآوری «'+prompt+'» بی‌پاسخ ماند.','warning'); escalated.append(r['id'])
@@ -818,7 +822,9 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/prescriptions':
    # ورود نسخه با تصویر. دارویاد این را دارد و ۴۱ هزار نصب گرفته؛ ورود دستی دارو
    # بزرگ‌ترین اصطکاک اولیه است و اگر ثبت دارو سخت باشد کاربر از روز اول می‌رود.
-   ref=as_text(d.get('image_ref','')).strip()
+   # as_text برای dict/list عمداً None می‌دهد تا فراخوان ۴۰۰ برگرداند؛
+   # صدا زدن .strip() روی None باعث AttributeError و پاسخ ۵۰۰ می‌شد.
+   ref=(as_text(d.get('image_ref','')) or '').strip()
    if not ref: return send(self,400,{'error':'image_ref_required','message':'لینک یا ارجاع تصویر نسخه لازم است.'})
    if c.execute('SELECT id FROM prescriptions WHERE image_ref=?',(ref,)).fetchone():
     return send(self,409,{'error':'duplicate_prescription','message':'این نسخه پیش‌تر ثبت شده است.'})
@@ -828,7 +834,7 @@ class Handler(SimpleHTTPRequestHandler):
    if not isinstance(raw,list): raw=[]
    for it in raw[:40]:
     if not isinstance(it,dict): continue
-    name=as_text(it.get('name','')).strip()
+    name=(as_text(it.get('name','')) or '').strip()
     if not name: continue
     iid=str(uuid.uuid4()); c.execute('INSERT INTO prescription_items VALUES(?,?,?,?,?,?,?,?)',(iid,pid,name[:160],as_text(it.get('dose','')),as_text(it.get('schedule','')),0,None,now())); items.append({'id':iid,'name':name})
    c.commit(); return send(self,201,{'id':pid,'status':'pending','items':items})

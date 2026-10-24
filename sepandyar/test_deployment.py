@@ -7,7 +7,7 @@
 ۳) مجوز INTERNET در مانیفست اعلام نشده بود
 ۴) service worker همهٔ GETها از جمله /api/ را کش می‌کرد (دادهٔ کهنهٔ دارو و سلامت)
 """
-import json, os, re, sys, threading, http.client, importlib.util, subprocess, shutil, uuid, datetime
+import json, os, re, sys, threading, http.client, importlib.util, subprocess, shutil, uuid, datetime, sqlite3
 from http.server import ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -914,6 +914,63 @@ check('خط پایه: هشدار تکراری نمی‌سازد',len(_b2.get('al
 _st,_al=req(B14,'/api/alerts')
 check('خط پایه: هشدار در فهرست هشدارها می‌نشیند',
       any(x['type'].startswith('baseline_deviation') for x in _al.get('items',[])))
+
+# ---------------------------------------------------------------- بخش ۱۵
+# باگ‌یابی دور هفتم: دو باگ واقعی که با فازر و آزمون همزمانی پیدا شدند.
+# ۱) as_text() برای dict/list عمداً None می‌دهد تا فراخوان ۴۰۰ برگرداند، اما
+#    /api/prescriptions مستقیم .strip() رویش صدا می‌زد → AttributeError → ۵۰۰.
+# ۲) پله‌بندی بی‌پاسخی «انتخاب، بعد نوشتن» بود. چون scheduler در thread خودش
+#    هم آن را صدا می‌زند، ۶ فراخوانی همزمان برای یک رویداد ۶ هشدار و ۶ کنش
+#    تکراری می‌ساخت — یعنی ۶ درخواست تماس بی‌معنی برای مراقب.
+print()
+print('۱۵) ورودی بدنه و همزمانی (باگ‌یابی دور هفتم)')
+_c15=sqlite3.connect(_m14.DB)
+_c15.execute("DELETE FROM proactive_events")
+_c15.commit()
+_poison=[{'x':1},[1,2],{'n':{'d':[1]}},[{'x':1}]]
+for _i,_p15 in enumerate(_poison):
+    _st,_r=req(B14,'/api/prescriptions','POST',{'image_ref':_p15,'items':[]})
+    check('ورود نسخه: image_ref %s → ۴۰۰ نه ۵۰۰'%(type(_p15).__name__),
+          _st==400 and _r.get('error')=='image_ref_required',(_st,_r))
+for _i,_p15 in enumerate(_poison):
+    _st,_r=req(B14,'/api/prescriptions','POST',{'image_ref':'pz-name-%d'%_i,'items':[{'name':_p15}]})
+    check('ورود نسخه: name %s → ۲۰۱ با صفر قلم نه ۵۰۰'%(type(_p15).__name__),
+          _st==201 and len(_r.get('items',[]))==0,(_st,_r))
+_st,_r=req(B14,'/api/prescriptions','POST',{'image_ref':'pz-ok','items':[{'name':'آتورواستاتین','dose':'۲۰mg'}]})
+check('ورود نسخه: کنترل مثبت هنوز کار می‌کند',_st==201 and len(_r.get('items',[]))==1,(_st,_r))
+_st,_r=req(B14,'/api/prescriptions','POST',{'image_ref':'pz-ok','items':[]})
+check('ورود نسخه: تکراری ۴۰۹ می‌ماند',_st==409,(_st,_r))
+
+# --- race پله‌بندی: ۶ thread دقیقاً همزمان روی یک رویداد بی‌پاسخ
+_old15=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=3)).isoformat()
+_eid15=uuid.uuid4().hex
+_c15.execute('INSERT INTO proactive_events VALUES(?,?,?,?,?,?,?)',
+             (_eid15,'morning_checkin','2026-01-01',_old15,None,None,None))
+if not list(_c15.execute('SELECT id FROM caregivers')):
+    _c15.execute("INSERT INTO caregivers VALUES('cg15','مریم','0912','daughter','[]','2026-01-01',NULL,0,NULL)")
+_c15.commit()
+_a0=_c15.execute('SELECT COUNT(*) FROM alerts').fetchone()[0]
+_g0=_c15.execute('SELECT COUNT(*) FROM caregiver_actions').fetchone()[0]
+_c15.close()
+_barrier15=threading.Barrier(6); _res15=[]
+def _run15():
+    _cc=_m14.db()
+    try:
+        _barrier15.wait(); _res15.append(len(_m14.escalate_stale_prompts(_cc)))
+    finally: _cc.close()
+_ts15=[threading.Thread(target=_run15) for _ in range(6)]
+for _t in _ts15: _t.start()
+for _t in _ts15: _t.join()
+_c15=sqlite3.connect(_m14.DB)
+_a1=_c15.execute('SELECT COUNT(*) FROM alerts').fetchone()[0]
+_g1=_c15.execute('SELECT COUNT(*) FROM caregiver_actions').fetchone()[0]
+check('همزمانی: ۶ فراخوانی همزمان یک رویداد، دقیقاً یک پله‌بادی',
+      sum(1 for _x in _res15 if _x)==1,sorted(_res15,reverse=True))
+check('همزمانی: فقط یک هشدار بی‌پاسخی ساخته می‌شود',_a1-_a0==1,(_a1-_a0))
+check('همزمانی: فقط یک کنش مراقب ساخته می‌شود',_g1-_g0==1,(_g1-_g0))
+check('همزمانی: UPDATE تصاحب شرط escalated_at IS NULL دارد',
+      'WHERE id=? AND escalated_at IS NULL' in srvsrc)
+_c15.close()
 
 _srv14.shutdown(); _srv14.server_close()
 
