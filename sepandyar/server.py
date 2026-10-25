@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """سپندیار — local MVP API. Production needs real auth, TLS, payment provider and managed DB."""
-import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, urllib.request as ureq, urllib.error as uerr
+import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, quote, unquote, parse_qs
@@ -218,8 +218,13 @@ def send(h,code,obj):
  raw=json.dumps(obj,ensure_ascii=False).encode(); h.send_response(code); h.send_header('Content-Type','application/json; charset=utf-8'); h.send_header('Content-Length',str(len(raw))); h.send_header('Access-Control-Allow-Origin','*'); h.end_headers(); h.wfile.write(raw)
 def rows(c,sql,args=()): return [dict(x) for x in c.execute(sql,args).fetchall()]
 def num(v):
- try: return float(v)
- except: return None
+ try: x=float(v)
+ except (TypeError,ValueError): return None
+ # json.loads طبق اجازهٔ پایتون لیترال‌های غیرمتناهی را می‌پذیرد: «1e400» به inf
+ # تبدیل می‌شود. با inf هر مقایسهٔ آستانه‌ای True می‌شود (inf>cmax یا -inf<cmin)،
+ # پس یک ورودی زباله «هشدار بحرانی سلامت» جعلی می‌ساخت و صف مراقب را پر می‌کرد.
+ # اندازه‌گیری شد: سه POST با 1e400 → سه هشدار vital_critical.
+ return x if math.isfinite(x) else None
 def evaluate_vital(c,kind,value):
  vals=[]
  if kind=='blood_pressure' and isinstance(value,dict): vals=[('systolic',num(value.get('systolic'))),('diastolic',num(value.get('diastolic')))]
@@ -443,8 +448,11 @@ def as_int(v,default=0):
 
 def as_float(v):
  # فیلد غایب یا غیرعددی باید 400 بدهد؛ float(None) پیش‌تر 500 می‌داد
- try: return float(v)
+ try: x=float(v)
  except Exception: return None
+ # inf/NaN هم «غیرمعتبر» است: remaining=inf شمارش دارو را برای همیشه بی‌معنا می‌کرد
+ # و refill_threshold=inf هر دارویی را در وضعیت «نیازمند تمدید» نشان می‌داد.
+ return x if math.isfinite(x) else None
 
 def as_text(v,default=''):
  # مقدار ساخت‌یافته هرگز نباید به sqlite برود: «type 'dict' is not supported»
@@ -704,7 +712,10 @@ CSP=("default-src 'self'; "
  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
  "font-src 'self' https://fonts.gstatic.com data:; "
  "img-src 'self' data: blob: https:; "
- "connect-src 'self' https://api.openai.com; "
+ # میزبان wss باید «صریح» بیاید: طبق CSP3 فقط http→https و ws→wss ارتقا می‌یابند،
+ # پس https:// هیچ‌وقت wss:// را نمی‌پوشاند. بدون این، مسیر Gemini Live (بند ۵)
+ # در مرورگر پیش از رسیدن به سرور بسته می‌شد. آدرس از LIVE_WS_BASE گرفته شده.
+ "connect-src 'self' https://api.openai.com wss://generativelanguage.googleapis.com; "
  "media-src 'self' blob:; "
  "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 SECURITY_HEADERS=(('Content-Security-Policy',CSP),

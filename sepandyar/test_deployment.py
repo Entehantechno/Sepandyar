@@ -1459,6 +1459,96 @@ check('بخش۲۱ نسخهٔ assets اندروید بایت‌به‌بایت ی
 
 _s21.shutdown(); _s21.server_close()
 
+# ===================== بخش ۲۲: سازگاری CSP با مسیرهای واقعی اپ، و مقدارهای غیرمتناهی =====================
+# این بخش مستقیماً به دو باگی می‌پردازد که هر دو «بی‌صدا» بودند:
+#  (۱) CSP که دور سیزدهم افزوده شد، میزبان wss را نداشت و مسیر Gemini Live را در
+#      مرورگر می‌بست — ولی هیچ آزمونی CSP را enforce نمی‌کرد، پس دیده نمی‌شد.
+#  (۲) json.loads مقدار «1e400» را به inf تبدیل می‌کرد و evaluate_vital با inf
+#      «بحرانی» می‌داد؛ اندازه‌گیری شد: سه POST زباله → سه هشدار vital_critical جعلی.
+_s22=ThreadingHTTPServer(('127.0.0.1',0),_m14.Handler)
+threading.Thread(target=_s22.serve_forever,daemon=True).start()
+B22='http://127.0.0.1:%d'%_s22.server_address[1]
+print()
+print('--- بخش ۲۲: سازگاری CSP با اپ + مقدارهای غیرمتناهی ---')
+
+from urllib.parse import urlparse as _up22
+_DEFAULT_PORTS={'http':80,'https':443,'ws':80,'wss':443}
+def _scheme_match(a,b):
+    a,b=a.lower(),b.lower()
+    if a==b: return True
+    if a=='http' and b=='https': return True   # ارتقای مجاز CSP3
+    if a=='ws'   and b=='wss':   return True   # ارتقای مجاز CSP3
+    return False                                # https→wss مجاز «نیست»
+def _csp_match(url,expr,os_,oh,op):
+    u=_up22(url)
+    if expr=="'self'":
+        return (oh==u.hostname and op==(u.port or _DEFAULT_PORTS.get(u.scheme))
+                and (_scheme_match(os_,u.scheme) or u.scheme in ('https','wss')))
+    if expr.endswith(':') and '/' not in expr[:-1]: return _scheme_match(expr[:-1],u.scheme)
+    e=_up22(expr if '//' in expr else 'https://'+expr)
+    if not _scheme_match(e.scheme,u.scheme): return False
+    h=e.hostname
+    if h.startswith('*.'):
+        if not (u.hostname==h[2:] or (u.hostname or '').endswith(h[1:])): return False
+    elif h!=u.hostname: return False
+    return (e.port or _DEFAULT_PORTS.get(e.scheme))==(u.port or _DEFAULT_PORTS.get(u.scheme))
+def _directive(name):
+    for part in _m14.CSP.split(';'):
+        p=part.strip()
+        if p.startswith(name+' '): return p.split()[1:]
+    return ['__ABSENT__']
+_OS,_OH,_OP='https','sepandyar.example.com',443
+def _allowed(directive,url):
+    return any(_csp_match(url,e,_OS,_OH,_OP) for e in _directive(directive))
+
+# میزبان wss از خودِ LIVE_WS_BASE گرفته می‌شود، نه از یک رشتهٔ کپی‌شده؛ وگرنه
+# اگر آدرس عوض شود این آزمون بی‌صدا سبز می‌ماند.
+_ws_host=_up22(_m14.LIVE_WS_BASE).netloc
+_real=[('connect-src',_m14.LIVE_WS_BASE+'?access_token=x','Gemini Live (WebSocket) — بند ۵'),
+       ('connect-src','https://api.openai.com/v1/realtime/calls','OpenAI realtime'),
+       ('connect-src','https://sepandyar.example.com/api/vitals','API خودی'),
+       ('font-src','https://fonts.gstatic.com/s/vazirmatn/x.woff2','فونت Vazirmatn'),
+       ('style-src','https://fonts.googleapis.com/css2?family=Vazirmatn','CSS گوگل'),
+       ('img-src','https://upload.wikimedia.org/x.jpg','تصویر دارو (disambiguation)')]
+for _d,_u,_l in _real:
+    check('بخش۲۲ CSP مسیر واقعی را می‌پذیرد: '+_l, _allowed(_d,_u), _d+' '+_u[:70])
+# کنترل منفی: اگر سیاست هر چیزی را بپذیرد، بررسی‌های بالا بی‌معنا می‌شوند.
+for _d,_u in [('connect-src','https://evil.example.com/x'),('connect-src','wss://evil.example.com/x'),
+              ('script-src','https://evil.example.com/x.js'),('img-src','http://evil.example.com/x.png')]:
+    check('بخش۲۲ CSP مبدأ متخاصم را می‌بندد: '+_d, not _allowed(_d,_u), _u)
+check('بخش۲۲ میزبان wss دقیقاً همان LIVE_WS_BASE است', _ws_host=='generativelanguage.googleapis.com', _ws_host)
+
+# --- مقدارهای غیرمتناهی: باید ۴۰۰ بدهند و «هیچ» هشداری نسازند ---
+def _alert_count():
+    return len(req(B22,'/api/alerts')[1].get('items',[]))
+_n0=_alert_count()
+for _v in ['-1e400','1e400','1e999','Infinity','-Infinity','NaN','inf','nan']:
+    _code,_j=req(B22,'/api/vitals','POST',{'type':'weight','value':_v})
+    check('بخش۲۲ value=%s با ۴۰۰ رد می‌شود'%_v, _code==400 and _j.get('error')=='invalid_vital', (_code,_j))
+_n1=_alert_count()
+check('بخش۲۲ ورودی غیرمتناهی هیچ هشدار بحرانی جعلی نمی‌سازد', _n1==_n0, (_n0,_n1))
+# کنترل مثبت: اگر این سبز بماند ولی بالایی‌ها هم سبز باشند، ممکن است کل
+# هشداردهی از کار افتاده باشد. پس بحران «واقعی» باید هنوز هشدار بسازد.
+_code,_j=req(B22,'/api/vitals','POST',{'type':'blood_pressure','value':{'systolic':300,'diastolic':180}})
+check('بخش۲۲ بحران واقعی هنوز critical ارزیابی می‌شود', _code==201 and any(r.get('status')=='critical' for r in (_j.get('evaluation') or {}).get('results',[])), (_code,_j))
+check('بخش۲۲ بحران واقعی هنوز هشدار می‌سازد', _alert_count()>_n1)
+_code,_j=req(B22,'/api/vitals','POST',{'type':'weight','value':72.5})
+check('بخش۲۲ مقدار عادی هنوز normal است', _code==201 and (_j.get('evaluation') or {}).get('results',[{}])[0].get('status')=='normal', (_code,_j))
+
+# --- همان قاعده برای remaining / refill_threshold (شکاف باز از دور ششم) ---
+for _lbl,_d in [('remaining=1e400',{'remaining':'1e400','refill_threshold':5}),
+                ('refill_threshold=1e400',{'remaining':3,'refill_threshold':'1e400'}),
+                ('remaining=nan',{'remaining':'nan','refill_threshold':5}),
+                ('remaining=inf',{'remaining':'inf','refill_threshold':5})]:
+    _code,_j=req(B22,'/api/medications/x-details-22/details','POST',_d)
+    check('بخش۲۲ %s با ۴۰۰ رد می‌شود'%_lbl, _code==400 and _j.get('error')=='invalid_medication_quantity', (_code,_j))
+_code,_j=req(B22,'/api/medications/x-details-22/details','POST',{'remaining':30,'refill_threshold':5})
+check('بخش۲۲ مقدارهای معتبر remaining/refill_threshold هنوز پذیرفته می‌شوند', _code==200, (_code,_j))
+_code,_j=req(B22,'/api/medications/x-refill-22/refill','POST',{'amount':'1e400'})
+check('بخش۲۲ refill با amount=1e400 با ۴۰۰ رد می‌شود', _code==400 and _j.get('error')=='invalid_amount', (_code,_j))
+
+_s22.shutdown(); _s22.server_close()
+
 print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
 if failures:
