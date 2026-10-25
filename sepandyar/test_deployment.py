@@ -1041,7 +1041,16 @@ _ln24=getattr(_m14,'local_now',None)
 _hh=(_ln24() if _ln24 else datetime.datetime.now()).strftime('%H:%M')   # ساعت ایران؛ پیش‌تر now() خام بود و تست به باگ کوپل شده بود
 req(B14,'/api/medications','POST',{'name':'داروی آزمون ۱۶','time':_hh,'instructions':'x'})
 for _n,_want in [(0,0),(2,1)]:
-    req(B14,'/api/reminder-settings','POST',{'quiet_start':'00:00','quiet_end':'00:01','max_nudges':_n})
+    # پنجرهٔ سکوت باید «قطعاً» اکنون را نگیرد. پیش‌تر 00:00–00:01 سخت‌کد بود و
+    # in_quiet_window نیمه‌باز است (s<=c<e)، پس دقیقاً در دقیقهٔ ۰۰:۰۰ «اکنون»
+    # را می‌گرفت، یادآوری‌ها خفه می‌شدند و سنجش با (0,1) می‌شکست — یک دقیقه در
+    # شبانه‌روز. این همان دسته باگی است که در بخش۲۴ رفع شد: پنجره را نسبت به
+    # اکنون بساز، نه با عدد ثابت. پنجرهٔ ۱۲ ساعت دورتر هرگز اکنون را نمی‌گیرد.
+    _qs=(_ln24()+datetime.timedelta(hours=12)).strftime('%H:%M') if _ln24 else '03:00'
+    _qe=(_ln24()+datetime.timedelta(hours=12,minutes=1)).strftime('%H:%M') if _ln24 else '03:01'
+    _st16,_rs16=req(B14,'/api/reminder-settings','POST',{'quiet_start':_qs,'quiet_end':_qe,'max_nudges':_n})
+    # تنظیمات باید واقعاً پذیرفته شود؛ وگرنه این بخش بی‌صدا روی پیش‌فرض سبز می‌شود.
+    check('max_nudges=%d: تنظیمات یادآوری پذیرفته شد'%_n,_st16 in (200,201),(_st16,_rs16))
     _c16=sqlite3.connect(_m14.DB); _c16.execute('DELETE FROM reminder_events'); _c16.commit(); _c16.close()
     for _ in range(4): req(B14,'/api/reminders/due')
     _c16=sqlite3.connect(_m14.DB)
