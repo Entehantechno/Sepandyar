@@ -39,7 +39,7 @@
 
 | محل | چه می‌کند |
 | --- | --- |
-| `server.py:414–423` — `GET /api/realtime/session` | کلید موقت (`client_secret`) را از `api.openai.com/v1/realtime/client_secrets` می‌گیرد. مدل پیش‌فرض `gpt-realtime-2.1`، صدا `marin`، `turn_detection: semantic_vad` |
+| `app/handler.py` — `GET /api/realtime/session` | کلید موقت (`client_secret`) را از `api.openai.com/v1/realtime/client_secrets` می‌گیرد. مدل پیش‌فرض `gpt-realtime-2.1`، صدا `marin`، `turn_detection: server_vad` با `silence_duration_ms = patience_ms` پروفایل کاربر (پس از رفع ایراد ۱) |
 | `index.html:88` — `tryRealtimeVoice()` | WebRTC می‌سازد، میکروفون را به `RTCPeerConnection` می‌دهد، کانال دادهٔ `oai-events` باز می‌کند و رویدادهای صوتی را می‌خواند |
 | `index.html:91` | `tryRealtimeVoice().then(ok=>{if(!ok)startAlwaysListening()})` → **مسیر زنده اولویت اول است** و Web Speech API فقط جایگزینِ هنگام شکست |
 
@@ -50,9 +50,18 @@
 **ایراد ۱ — تنظیم «صبر گفتاری» ما به مسیر زنده نمی‌رسد. (مهم‌ترین یافته)**
 
 `server.py:418` و `index.html:88` هر دو `turn_detection:{type:'semantic_vad'}` می‌فرستند.
+*(ارجاع خط مربوط به زمان پژوهش است؛ آن کد اکنون در `app/handler.py` است و
+سمت کلاینت دیگر VAD نمی‌فرستد — به «به‌روزرسانی» پایین نگاه کنید.)*
 اما طبق مستندات رسمی OpenAI، پارامترهای `silence_duration_ms`، `prefix_padding_ms` و `threshold` **فقط در حالت `server_vad` کار می‌کنند** و در `semantic_vad` نادیده گرفته می‌شوند. حالت `semantic_vad` به‌جای آن‌ها فقط `eagerness` را می‌پذیرد (`low|medium|high|auto`).
 
 نتیجه: کل موتور صبر گفتاری مرحلهٔ ۵ — `patience_ms` پیش‌فرض ۱۸۰۰ms، سقف ۵۰۰۰ms، کالیبراسیون سه‌مرحله‌ای — **در مسیر زنده هیچ اثری ندارد.** سالمندی که وسط جمله‌اش مکث می‌کند، در مسیر زنده وسط حرفش قطع می‌شود؛ دقیقاً همان مشکلی که مرحلهٔ ۵ برایش ساخته شد.
+
+**به‌روزرسانی — این ایراد رفع شده است.** پس از ماژولار شدن کد، این مسیر در
+`app/handler.py` (مسیر `GET /api/realtime/session`) است و اکنون
+`turn_detection:{type:'server_vad', silence_duration_ms: patience_ms}` می‌فرستد؛
+`semantic_vad` تنها در توضیحِ داخل کد باقی مانده است. سمت کلاینت (`index.html`)
+دیگر هیچ پیکربندی VAD نمی‌فرستد، پس سرور تنها منبع حقیقت است و دو جا با هم
+واگرا نمی‌شوند. راه‌حلِ نخست از دو راه‌حل زیر برگزیده شد.
 
 دو راه‌حل ممکن (هر دو بدون هزینه):
 - `server_vad` با `silence_duration_ms = patience_ms` از پروفایل کاربر، یا
@@ -247,7 +256,7 @@ Azure Voice Live را زمانی انتخاب می‌کنیم که (الف) هو
 ## ۹. نقشهٔ راه اجرایی (پیشنهاد، هنوز اجرا نشده)
 
 **گام ۰ — رایگان، همین حالا، پیش از هر خریدی:**
-1. `semantic_vad` را در `server.py:418` و `index.html:88` اصلاح کنیم تا `patience_ms` واقعاً اثر کند (ایراد ۱).
+1. ✅ **انجام شد** — `semantic_vad` در سمت سرور (اکنون `app/handler.py`) به `server_vad` با `silence_duration_ms = patience_ms` تغییر کرد تا `patience_ms` واقعاً اثر کند (ایراد ۱). سمت کلاینت دیگر VAD نمی‌فرستد.
 2. مسیر زنده را از پشت `ai_config.provider` قابل انتخاب کنیم تا `api.openai.com` از کلاینت بیرون برود (ایراد ۳).
 3. متن خروجی مسیر زنده را **حتی در حالت زنده** از `assess_risk` رد کنیم (ایراد ۲). رویداد `response.output_audio_transcript.delta` را که همین حالا در `index.html:88` می‌خوانیم، کافی است به `POST /api/conversation` بفرستیم — **بدون هیچ هزینهٔ اضافه، کل لایهٔ ایمنی برمی‌گردد.**
 
