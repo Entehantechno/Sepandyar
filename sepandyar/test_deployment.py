@@ -1628,6 +1628,39 @@ check('بخش۲۳ درخواست تماس سالمند بدون توکن کار 
 
 _s23.shutdown(); _s23.server_close()
 
+# ========== بخش ۲۵: بازخورد عمل در پنل مراقب ==========
+# سه فراخوان در caregiver.html از هلپر post() رد می‌شدند و با fetch خام می‌رفتند،
+# پس نه توکن می‌فرستادند و نه پاسخ را می‌سنجیدند. POST /api/safe-zones سه مسیر
+# خطای واقعاً دسترس‌پذیر دارد (lat/lon نال، مقدار غیرمتناهی، شعاع <= ۰) و در همهٔ
+# آن‌ها مراقب «افزودن محدودهٔ امن» را می‌زد و هیچ اتفاقی نمی‌افتاد: منطقه ثبت نمی‌شد
+# و هیچ پیامی هم نبود. اثبات رفتاری با jsdom انجام شد (۹ بررسی، ۰ شکست)؛ این‌جا
+# معادل سطح منبع است تا بدون وابستگی به node همیشه اجرا شود.
+print()
+print('--- بخش ۲۵: بازخورد عمل در پنل مراقب ---')
+_cg=open(os.path.join(ROOT,'caregiver.html'),encoding='utf-8').read()
+# ۱) فقط دو هلپر get/post حق دارند fetch خام بزنند
+_nf=re.findall(r'await fetch\(',_cg)
+check('بخش۲۵ فقط هلپرهای get/post با fetch خام کار می‌کنند', len(_nf)==2, len(_nf))
+check('بخش۲۵ فراخوان مستقیم /api/safe-zones با fetch خام نمانده',
+      "fetch(API+'/api/safe-zones'" not in _cg, _cg.find("fetch(API+'/api/safe-zones'"))
+check('بخش۲۵ فراخوان مستقیم /ack با fetch خام نمانده',
+      "fetch(API+'/api/alerts/'" not in _cg, _cg.find("fetch(API+'/api/alerts/'"))
+check('بخش۲۵ فراخوان مستقیم /complete با fetch خام نمانده',
+      "fetch(API+'/api/care-tasks/'" not in _cg, _cg.find("fetch(API+'/api/care-tasks/'"))
+# ۲) هر سه هندلر باید شاخهٔ موفقیت و شکست داشته باشند
+for _fn in ['ack','completeTask','addCurrentZone']:
+    _m=re.search(r'async function '+_fn+r'\(.*?(?=\n(?:async )?function |\nfunction |\Z)',_cg,re.S)
+    _body=_m.group(0) if _m else ''
+    check('بخش۲۵ %s نتیجهٔ درخواست را می‌سنجد'%_fn, 'r.ok' in _body, _body[:120])
+    check('بخش۲۵ %s در هر دو شاخه بازخورد می‌دهد'%_fn, _body.count('sayStatus')>=2, _body.count('sayStatus'))
+# ۳) ناحیهٔ اعلام زنده
+check('بخش۲۵ ناحیهٔ aria-live دارد', 'aria-live="polite"' in _cg, _cg.find('aria-live'))
+check('بخش۲۵ ناحیهٔ وضعیت role="status" دارد', 'id="cg-status"' in _cg and 'role="status"' in _cg, None)
+check('بخش۲۵ ناحیهٔ وضعیت پیش از محتوای اصلی در ترتیب سند است',
+      0 < _cg.find('id="cg-status"') < _cg.find('id="main"'),
+      (_cg.find('id="cg-status"'),_cg.find('id="main"')))
+check('بخش۲۵ CSS وضعیت، حالت خالی را پنهان می‌کند', '.cg-status:empty{display:none}' in _cg, None)
+
 # ================== بخش ۲۴: منطق روزانه بر پایهٔ ساعت ایران ==================
 # چهار محل از منطق روزانه از datetime.now() خام استفاده می‌کردند، یعنی ساعتِ خودِ
 # سرور. روی هر میزبانی که منطقهٔ زمانی‌اش تهران نیست، یادآوری دارو به همان اختلاف
