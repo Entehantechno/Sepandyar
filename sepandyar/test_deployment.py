@@ -1643,6 +1643,11 @@ check('بخش۲۶ insert_transaction تعریف شده', _it is not None, 'تا�
 if _it:
     _c26=_m14.db()
     _k26='payment::sec26-det'
+    # پاک‌سازی پیش از درج: این بخش باید «دوباراجراشدنی» باشد. بدون آن، اجرای
+    # دوم روی همان پایگاه‌داده به UNIQUE می‌خورد و بقیهٔ فایل را از پا درمی‌آورد.
+    _c26.execute("DELETE FROM transactions WHERE idempotency_key LIKE 'payment::sec26-%'")
+    _c26.execute("DELETE FROM transactions WHERE id='win-26' OR id='win-26b'")
+    _c26.commit()
     _c26.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',
                  ('win-26','payment',-5000,'برنده','2026-01-01T00:00:00+00:00',_k26))
     _c26.commit()
