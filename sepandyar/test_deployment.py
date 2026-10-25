@@ -1628,6 +1628,83 @@ check('بخش۲۳ درخواست تماس سالمند بدون توکن کار 
 
 _s23.shutdown(); _s23.server_close()
 
+# ========== بخش ۲۶: کلید تکرارناپذیری زیر بار همزمان ==========
+# دو درخواست همزمان با یک کلید، هر دو SELECT را «خالی» می‌بینند و هر دو درج
+# می‌کنند. UNIQUE جلوی درج دوم را می‌گرفت (پس پول هیچ‌وقت دوبار خرج نمی‌شد)
+# ولی استثنا تا هندلر سراسری بالا می‌رفت و کلاینت ۵۰۰ می‌گرفت. اندازه‌گیری
+# پیش از رفع: ۹۶ درخواست با کلیدهای تکراری → ۸۷ × ۲۰۰ و ۹ × ۵۰۰ (۹٪). برای
+# مسیر پرداخت بدترین سیگنال ممکن، چون پرداخت در واقع موفق بوده است.
+print()
+print('--- بخش ۲۶: کلید تکرارناپذیری زیر بار همزمان ---')
+
+# ۱) آزمون قطعی روی هلپر: حالت «بازنده» را بدون وابستگی به زمان‌بندی می‌سازد.
+_it=getattr(_m14,'insert_transaction',None)
+check('بخش۲۶ insert_transaction تعریف شده', _it is not None, 'تابع وجود ندارد')
+if _it:
+    _c26=_m14.db()
+    _k26='payment::sec26-det'
+    _c26.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',
+                 ('win-26','payment',-5000,'برنده','2026-01-01T00:00:00+00:00',_k26))
+    _c26.commit()
+    try:
+        _won,_wid=_it(_c26,'lose-26','payment',-5000,'بازنده',_k26)
+        check('بخش۲۶ درج تکراری استثنا نمی‌دهد', True, None)
+        check('بخش۲۶ بازنده «باخت» را گزارش می‌کند', _won is False, (_won,_wid))
+        check('بخش۲۶ شناسهٔ برنده را برمی‌گرداند', _wid=='win-26', _wid)
+    except Exception as _e26:
+        check('بخش۲۶ درج تکراری استثنا نمی‌دهد', False, type(_e26).__name__)
+        check('بخش۲۶ بازنده «باخت» را گزارش می‌کند', False, type(_e26).__name__)
+        check('بخش۲۶ شناسهٔ برنده را برمی‌گرداند', False, type(_e26).__name__)
+    # rollback باید UPDATE کیف پولِ بازنده را هم برگرداند
+    _c26b=_m14.db()
+    _b0=_c26b.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance']
+    _c26b.execute('UPDATE wallet SET balance=balance-? WHERE id=1',(5000,))
+    _it(_c26b,'lose-26b','payment',-5000,'بازنده',_k26)
+    _b1=_c26b.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance']
+    check('بخش۲۶ بازنده پولی جابه‌جا نمی‌کند (rollback)', _b0==_b1, (_b0,_b1))
+    # برنده باید بتواند درج کند
+    _won2,_wid2=_it(_c26b,'win-26b','payment',-5000,'برنده','payment::sec26-fresh')
+    check('بخش۲۶ کلید تازه «برد» می‌گیرد', _won2 is True and _wid2=='win-26b', (_won2,_wid2))
+    _c26b.rollback(); _c26b.close(); _c26.close()
+
+# ۲) آزمون رفتاری زیر بار: هیچ ۵۰۰‌ای مجاز نیست.
+import socket as _sk26
+from threading import Barrier as _Bar26
+_s26=ThreadingHTTPServer(('127.0.0.1',0),_m14.Handler)
+threading.Thread(target=_s26.serve_forever,daemon=True).start()
+_p26=_s26.server_address[1]
+_codes26=[]; _lk26=threading.Lock()
+def _pay26(trial,i,bar):
+    bar.wait()
+    _body=('{"amount":1000,"description":"s26-%d"}'%trial).encode()
+    _req=(b'POST /api/wallet/payment HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n'
+          b'Idempotency-Key: s26-'+str(trial).encode()+b'\r\nContent-Length: '+str(len(_body)).encode()+
+          b'\r\nConnection: close\r\n\r\n')+_body
+    try:
+        _s=_sk26.create_connection(('127.0.0.1',_p26),timeout=60); _s.sendall(_req); _d=b''
+        while True:
+            _c=_s.recv(65536)
+            if not _c: break
+            _d+=_c
+        _s.close()
+        with _lk26: _codes26.append(_d.split(b' ')[1].decode() if _d.startswith(b'HTTP') else '?')
+    except Exception:
+        with _lk26: _codes26.append('ERR')
+for _t26 in range(6):
+    _N=10; _bar=_Bar26(_N)
+    _ts=[threading.Thread(target=_pay26,args=(_t26,_i,_bar)) for _i in range(_N)]
+    [x.start() for x in _ts]; [x.join() for x in _ts]
+check('بخش۲۶ هیچ درخواست همزمانی ۵۰۰ نمی‌گیرد',
+      '500' not in _codes26, dict((k,_codes26.count(k)) for k in set(_codes26)))
+check('بخش۲۶ همهٔ تکرارها پاسخ معتبر می‌گیرند',
+      len(_codes26)==60 and all(k in ('200','409') for k in _codes26),
+      dict((k,_codes26.count(k)) for k in set(_codes26)))
+_c26c=sqlite3.connect(_m14.DB)
+_dups=[r for r in _c26c.execute("SELECT idempotency_key,COUNT(*) FROM transactions WHERE idempotency_key LIKE 'payment::s26-%' GROUP BY 1 HAVING COUNT(*)>1")]
+check('بخش۲۶ به ازای هر کلید تنها یک تراکنش ثبت می‌شود', _dups==[], _dups)
+_c26c.close()
+_s26.shutdown(); _s26.server_close()
+
 # ========== بخش ۲۵: بازخورد عمل در پنل مراقب ==========
 # سه فراخوان در caregiver.html از هلپر post() رد می‌شدند و با fetch خام می‌رفتند،
 # پس نه توکن می‌فرستادند و نه پاسخ را می‌سنجیدند. POST /api/safe-zones سه مسیر
@@ -1708,7 +1785,17 @@ except Exception:
 _s24=ThreadingHTTPServer(('127.0.0.1',0),_m14.Handler)
 threading.Thread(target=_s24.serve_forever,daemon=True).start()
 B24='http://127.0.0.1:%d'%_s24.server_address[1]
-_dose=datetime.datetime.now(_m14.ZoneInfo('Asia/Tehran')).strftime('%H:%M')
+# پنجرهٔ سکوت را «پیش از» سنجش سررسید، جایی دور از «الان» بگذاریم. بدون این،
+# تست به ساعت روز وابسته می‌شود: روزِ داخل پنجرهٔ پیش‌فرض ۲۲:۰۰–۰۷:۰۰ سرخ می‌شود.
+_n24=datetime.datetime.now(_m14.ZoneInfo('Asia/Tehran'))
+# پنجرهٔ «غیرساکت»: یک پنجرهٔ یک‌دقیقه‌ای دقیقاً ۱۲ ساعت دورتر. ۱۲ ساعت دورتر
+# هیچ‌گاه «الان» نیست، پس حتی با منطقِ عبور از نیمه‌شب در in_quiet_window هم
+# now داخلش نمی‌افتد. (now+120 این‌طور نبود: ساعت ۲۳:۰۰ به ۰۱:۰۰ می‌رسید و
+# بازهٔ پیچیده، ساعت ۲۱ را هم ساکت حساب می‌کرد.)
+_cs,_cj=req(B24,'/api/reminder-settings','POST',{'quiet_start':(_n24+datetime.timedelta(hours=12)).strftime('%H:%M'),
+                                         'quiet_end':(_n24+datetime.timedelta(hours=12,minutes=1)).strftime('%H:%M'),'max_nudges':2})
+check('بخش۲۴ تنظیم پنجرهٔ سکوت موفق است (۴۰۴ بی‌صدا نگذرد)', _cs in (200,201), (_cs,_cj))
+_dose=_n24.strftime('%H:%M')
 _c,_j=req(B24,'/api/medications','POST',{'name':'متفورمین تست۲۴','dose':'500mg','time':_dose,'frequency':'daily'})
 check('بخش۲۴ دارو با ساعت ایران ثبت می‌شود', _c==201, (_c,_j))
 _c,_j=req(B24,'/api/reminders/due')
@@ -1723,16 +1810,17 @@ check('بخش۲۴ دوزی که سررسید نیست گزارش نمی‌شود
 
 # ۴) پنجرهٔ سکوت باید به وقت ایران سنجیده شود — کاربرپسندترین پیامد این باگ.
 _now_ir=datetime.datetime.now(_m14.ZoneInfo('Asia/Tehran'))
-_qs=(_now_ir+datetime.timedelta(minutes=30)).strftime('%H:%M')
-_qe=(_now_ir+datetime.timedelta(minutes=90)).strftime('%H:%M')
-req(B24,'/api/reminders/settings','POST',{'quiet_start':_qs,'quiet_end':_qe,'max_nudges':2})
+# پنجرهٔ «ساکت»: (now-60, now+60) به‌طور ریاضی همیشه شامل now است.
+_qs=(_now_ir-datetime.timedelta(minutes=60)).strftime('%H:%M')
+_qe=(_now_ir+datetime.timedelta(minutes=60)).strftime('%H:%M')
+req(B24,'/api/reminder-settings','POST',{'quiet_start':_qs,'quiet_end':_qe,'max_nudges':2})
 _c,_j=req(B24,'/api/reminders/due')
 check('بخش۲۴ پنجرهٔ سکوت ایران یادآوری را سرکوب می‌کند',
       'متفورمین تست۲۴' not in [i.get('name') for i in _j.get('items',[])], (_qs,_qe,_j.get('items')))
 # کنترل مثبتِ سرکوب: پنجره را از روی «الان» برداریم، یادآوری باید برگردد.
-_qs2=(_now_ir+datetime.timedelta(minutes=180)).strftime('%H:%M')
-_qe2=(_now_ir+datetime.timedelta(minutes=240)).strftime('%H:%M')
-req(B24,'/api/reminders/settings','POST',{'quiet_start':_qs2,'quiet_end':_qe2,'max_nudges':2})
+_qs2=(_now_ir+datetime.timedelta(hours=12)).strftime('%H:%M')
+_qe2=(_now_ir+datetime.timedelta(hours=12,minutes=1)).strftime('%H:%M')
+req(B24,'/api/reminder-settings','POST',{'quiet_start':_qs2,'quiet_end':_qe2,'max_nudges':2})
 # کنترل مثبت با داروی تازه: UNIQUE(medication_id,reminder_date,channel) در reminder_events
 # فقط یک یادآوری به ازای هر دارو/روز/کانال اجازه می‌دهد، پس همان دارو دوباره شلیک نمی‌شود.
 _dose2=datetime.datetime.now(_m14.ZoneInfo('Asia/Tehran')).strftime('%H:%M')

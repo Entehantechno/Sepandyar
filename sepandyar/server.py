@@ -22,6 +22,33 @@ def _tehran_tz():
  except Exception: return datetime.timezone(datetime.timedelta(hours=3,minutes=30))
 LOCAL_TZ=_tehran_tz()
 def local_now(): return datetime.datetime.now(LOCAL_TZ)
+def insert_transaction(c,tid,kind,amount,description,key):
+ """درج تراکنش با کلید تکرارناپذیری؛ برندهٔ واقعی را پایگاه‌داده تعیین می‌کند.
+
+ دو درخواست همزمان با یک کلید، هر دو SELECT را «خالی» می‌بینند و هر دو درج
+ می‌کنند. تا پیش از این، استثنا‌ی نقض UNIQUE تا هندلر سراسری بالا می‌رفت و
+ کلاینت ۵۰۰ می‌گرفت — برای مسیر پرداخت بدترین سیگنال ممکن، چون پرداخت در
+ واقع «موفق» بوده و کلاینت با دیدن ۵۰۰ یا دوباره تلاش می‌کند یا به کاربر
+ خطا نشان می‌دهد. پول هیچ‌وقت دوبار خرج نمی‌شد (UNIQUE جلوی درج دوم را
+ می‌گرفت)، ولی پاسخ غلط بود.
+
+ حالا نقض UNIQUE یعنی «درخواست همزمان دیگری برده است» و پاسخِ همان برنده
+ بازپخش می‌شود. UPDATE کیف پول در همان تراکنشِ commit‌نشده است، پس rollback
+ آن را هم برمی‌گرداند و بازنده پولی جابه‌جا نمی‌کند.
+
+ بازگشت: (True, tid) اگر این درخواست برنده شد، وگرنه (False, id برنده).
+ """
+ try:
+  c.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',
+            (tid,kind,amount,description,now(),key))
+  return True,tid
+ except sqlite3.IntegrityError:
+  c.rollback()
+  row=c.execute('SELECT id FROM transactions WHERE idempotency_key=?',(key,)).fetchone()
+  # اگر ردیفی با این کلید نیست، نقض UNIQUE از جای دیگری آمده (مثلاً id تکراری)
+  # و نباید بی‌صدا به بازپخش تبدیل شود.
+  if row is None: raise
+  return False,row['id']
 def db(h=None):
  # اتصال روی هندلر ثبت می‌شود تا در پایان درخواست بسته شود؛
  # وگرنه خطای وسط تراکنش، قفل نوشتن را رها می‌کند و کل پایگاه‌داده قفل می‌شود
@@ -1196,7 +1223,11 @@ class Handler(SimpleHTTPRequestHandler):
     if old['kind']!='topup' or old['amount']!=amount: return send(self,409,{'error':'idempotency_key_conflict','message':'این کلید تکرارناپذیری پیش‌تر برای درخواست دیگری به کار رفته است.'})
     return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':old['id'],'replayed':True})
    if amount<=0 or amount>100000000: return send(self,400,{'error':'invalid_amount'})
-   tid=str(uuid.uuid4()); c.execute('UPDATE wallet SET balance=balance+? WHERE id=1',(amount,)); c.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',(tid,'topup',amount,d.get('description','شارژ کیف پول'),now(),key)); c.commit(); return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':tid})
+   tid=str(uuid.uuid4()); c.execute('UPDATE wallet SET balance=balance+? WHERE id=1',(amount,))
+   won,wid=insert_transaction(c,tid,'topup',amount,d.get('description','شارژ کیف پول'),key)
+   if won:
+    c.commit(); return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':tid})
+   return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':wid,'replayed':True})
   if p=='/api/wallet/payment':
    amount=as_int(d.get('amount',0)); key=idem_key(self,d,'payment')
    if amount is None: return send(self,400,{'error':'invalid_amount','message':'مبلغ باید عدد باشد.'})
@@ -1207,7 +1238,11 @@ class Handler(SimpleHTTPRequestHandler):
     return send(self,200,{'status':'succeeded','balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'transaction_id':old['id'],'replayed':True})
    w=c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance']
    if amount<=0 or amount>w: return send(self,409,{'status':'insufficient_funds','balance':w})
-   tid=str(uuid.uuid4()); c.execute('UPDATE wallet SET balance=balance-? WHERE id=1',(amount,)); c.execute('INSERT INTO transactions(id,kind,amount,description,created_at,idempotency_key) VALUES(?,?,?,?,?,?)',(tid,'payment',-amount,d.get('description','پرداخت'),now(),key)); c.commit(); return send(self,200,{'status':'succeeded','transaction_id':tid,'balance':w-amount})
+   tid=str(uuid.uuid4()); c.execute('UPDATE wallet SET balance=balance-? WHERE id=1',(amount,))
+   won,wid=insert_transaction(c,tid,'payment',-amount,d.get('description','پرداخت'),key)
+   if won:
+    c.commit(); return send(self,200,{'status':'succeeded','transaction_id':tid,'balance':w-amount})
+   return send(self,200,{'status':'succeeded','transaction_id':wid,'balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'replayed':True})
   if p=='/api/events':
    eid=str(uuid.uuid4()); c.execute('INSERT INTO events VALUES(?,?,?,?)',(eid,d.get('type','unknown'),json.dumps(d.get('payload',{}),ensure_ascii=False),now())); c.commit(); return send(self,201,{'ok':True,'id':eid})
   if p=='/api/education':
