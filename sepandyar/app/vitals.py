@@ -1,4 +1,12 @@
-"""سپندیار — vitals"""
+"""سپندیار — vitals
+
+ارزیابی علائم حیاتی و تشخیص هشدار.
+
+evaluate_vital() هر نوع را با آستانهٔ خودش می‌سنجد (systolic، diastolic،
+glucose، weight، heart_rate) و وزنِ خارج از بازه را critical می‌دهد —
+پیش از آن weight=۱ «normal» شمرده می‌شد. detect_deviation_alerts() انحراف
+از خط پایهٔ خودِ کاربر را محاسبه می‌کند، نه فقط عبور از آستانهٔ مطلق.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

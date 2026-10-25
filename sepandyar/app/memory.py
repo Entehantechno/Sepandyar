@@ -1,4 +1,12 @@
-"""سپندیار — memory"""
+"""سپندیار — memory
+
+حافظهٔ گفت‌وگو و فراخوانی مدل زبانی.
+
+remember() و recall() گردش‌ها را در جدول conversation_turns نگه می‌دارند و
+memory_block() آن‌ها را به پرامپت تزریق می‌کند. conversation_summary()
+خلاصه‌ای می‌سازد که در داشبورد مراقب نمایش داده می‌شود — با حریم خصوصی
+«flagged»: خلاصه همیشه، متن کامل تنها برای گردش‌های پرچم‌خوردهٔ ایمنی.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

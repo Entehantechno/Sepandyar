@@ -1,4 +1,16 @@
-"""سپندیار — transactions"""
+"""سپندیار — transactions
+
+درج تراکنش کیف پول با کلید تکرارناپذیری.
+
+insert_transaction() به جای «SELECT سپس INSERT» اول INSERT می‌کند و نقض
+قید UNIQUE را نشانهٔ درخواست تکراری می‌گیرد؛ سپس rollback می‌کند (چون
+UPDATE کیف پول در همان تراکنشِ commit‌نشده است، بازنده پول را جابه‌جا
+نمی‌کند)، برنده را دوباره می‌خواند و آن را با replayed=True برمی‌گرداند.
+
+نقضِ بدون کلیدِ مطابق دوباره raise می‌شود تا پنهان نماند. پیش از این،
+بازندهٔ رقابت IntegrityError می‌گرفت و کارخواه ۵۰۰ می‌دید، هرچند پول
+هرگز دوبار خرج نمی‌شد.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

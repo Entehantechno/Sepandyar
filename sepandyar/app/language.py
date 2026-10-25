@@ -1,4 +1,12 @@
-"""سپندیار — language"""
+"""سپندیار — language
+
+لایهٔ زبان فارسی: نرمال‌سازی نویسه، لهجه، صبر گفتاری، تصویر‌یابی و سنجهٔ ریسک.
+
+این ماژول بزرگ‌ترین بخش منطق غیر-HTTP برنامه است: تطبیق نام دارو با
+difflib و الگوهای گویشی، حذف پسوندهای مفعولی، یادگیری نام مستعار، جست‌وجوی
+تصویر در Openverse و Commons برای رفع ابهام، و assess_risk() که هر متن
+خروجی — حتی در مسیر زنده — از آن می‌گذرد.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

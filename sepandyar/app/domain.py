@@ -1,4 +1,12 @@
-"""سپندیار — domain"""
+"""سپندیار — domain
+
+کمکی‌های دامنهٔ کاری که به HTTP وابسته نیستند: تجزیهٔ ساعت HH:MM، پنجرهٔ
+سکوت شبانه، فاصلهٔ جغرافیایی و ساخت محمولهٔ اشتراک‌گذاری.
+
+as_hhmm() جای strptime('%H:%M') خام را گرفت؛ پیش از آن یک رشتهٔ خراب
+استثنا می‌انداخت و همان رکورد خراب هر درخواست بعدی را هم ۵۰۰ می‌کرد.
+in_quiet_window() حالت نیمه‌شب‌گذر (۲۲:۰۰ تا ۰۷:۰۰) را جداگانه مدیریت می‌کند.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

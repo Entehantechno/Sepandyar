@@ -1,4 +1,12 @@
-"""سپندیار — database"""
+"""سپندیار — database
+
+کارخانهٔ اتصال پایگاه‌داده.
+
+db() به ازای هر درخواست یک اتصال تازه با timeout=۱۵ ثانیه باز می‌کند،
+آن را به عنوان h._db ثبت می‌کند و در پایان درخواست بسته می‌شود. اسکریپت
+ساخت جدول‌ها و PRAGMAها (WAL، synchronous=NORMAL، busy_timeout، cache_size)
+در هر فراخوانی اجرا می‌شود تا اتصالِ تازه همان تنظیمات را داشته باشد.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

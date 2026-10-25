@@ -1,4 +1,15 @@
-"""سپندیار — clock"""
+"""سپندیار — clock
+
+تنها مرجع زمان برنامه.
+
+now() همیشه UTC و aware برمی‌گرداند و برای ذخیره در پایگاه‌داده است.
+local_now() همان لحظه را به منطقهٔ زمانی تهران تبدیل می‌کند و فقط برای
+مقایسه با ساعت دیواری کاربر (یادآور دوز، پنجرهٔ سکوت) به کار می‌رود.
+
+پیش از باگ‌یابی دور شانزدهم چند مقایسه با datetime.now() خام انجام می‌شد؛
+چون سرور روی UTC اجرا می‌شود، یادآور ساعت ۱۹:۲۸ تهران هرگز «سررسیده»
+نمی‌شد. اکنون همهٔ مقایسه‌های ساعت دیواری از local_now() می‌گذرند.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

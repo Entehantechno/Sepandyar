@@ -1,4 +1,13 @@
-"""سپندیار — primitives"""
+"""سپندیار — primitives
+
+آجرهای پایهٔ درخواست و پاسخ: خواندن بدنه، ارسال پاسخ، خواندن ردیف‌ها و
+تبدیل‌های ایمن عددی و متنی.
+
+num()، as_int() و as_float() مقدار غیرمحدود را رد می‌کنند (math.isfinite)؛
+پیش از آن json.loads('1e400') به inf تبدیل می‌شد و سه فراخوانی
+/api/vitals شش هشدار ساختگی می‌ساخت. desurrogate() نویسه‌های جانشین
+باقی‌مانده از مسیر percent-encoding را پاک می‌کند.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

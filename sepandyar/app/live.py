@@ -1,4 +1,14 @@
-"""سپندیار — live"""
+"""سپندیار — live
+
+مسیر صوتی زندهٔ Gemini.
+
+ثابت‌های اتصال (LIVE_WS_BASE، LIVE_MODEL، LIVE_VOICE) و ساخت پیکربندی VAD،
+پیکربندی توکن و پرامپت سیستم.
+
+live_vad_config() صبر گفتاری کاربر را به silenceDurationMs نگاشت می‌کند.
+دقت شود که wss:// با https:// یکی نیست: در CSP، connect-src باید میزبان
+wss را جداگانه فهرست کند و https: به wss: ارتقا نمی‌یابد.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

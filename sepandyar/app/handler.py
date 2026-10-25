@@ -1,4 +1,15 @@
-"""سپندیار — handler"""
+"""سپندیار — handler
+
+کلاس Handler و همهٔ مسیرهای HTTP.
+
+هر مسیر یک «if p==...» است. مسیرهای /api/caregiver/* باید caregiver_session()
+را صدا بزنند؛ تنها دو استثنا عمدی است: /api/caregiver/session (خودِ ورود)
+و /api/caregiver/call-request (سمت سالمند، بی‌توکن).
+
+سرو پروندهٔ ایستا فقط از روی STATIC_ALLOW و بر پایهٔ مسیر decode‌شده
+انجام می‌شود؛ do_HEAD هم از همین دروازه می‌گذرد، چون در
+SimpleHTTPRequestHandler مستقیم send_head() را صدا می‌زند.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

@@ -1,4 +1,13 @@
-"""سپندیار — caregiver"""
+"""سپندیار — caregiver
+
+کمکی‌های سمت مراقب و سالمند: ساخت هشدار، صف کنش‌های مراقب، سنجش رضایت،
+ماسک‌کردن شماره، کد دعوت و اعتبارسنجی نشست مراقب.
+
+open_alert_once() و enqueue_caregiver_action() هر دو «تصاحب اتمیک» هستند:
+یک INSERT شرطی با WHERE NOT EXISTS و سپس سنجش cur.rowcount. این الگو در
+باگ‌یابی دور نهم جایگزین select-then-insert شد، چون زیر بار همزمانی چند
+ردیف تکراری می‌ساخت.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

@@ -1,4 +1,15 @@
-"""سپندیار — proactive"""
+"""سپندیار — proactive
+
+پرامپت‌های پیش‌دستانه، پله‌بادی و زمان‌بند پس‌زمینه.
+
+collect_due_prompts() سررسیدها را با INSERT شرطی اتمیک ثبت می‌کند
+(تصاحب با WHERE NOT EXISTS + سنجش cur.rowcount) تا فراخوانی‌های همزمان
+یک سررسید، چند پرامپت نسازند. scheduler_loop() در یک رشتهٔ درون‌فرایندی
+با فاصلهٔ ۶۰ ثانیه اجرا می‌شود و اتصال خودش را در finally می‌بندد.
+
+محدودیت شناخته‌شده: این cron یا systemd نیست؛ اجرای از دست رفته پس از
+راه‌اندازی مجدد جبران نمی‌شود.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

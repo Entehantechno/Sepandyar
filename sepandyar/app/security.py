@@ -1,4 +1,12 @@
-"""سپندیار — security"""
+"""سپندیار — security
+
+allowlist سرو پروندهٔ ایستا، سیاست امنیت محتوا و سرصفحه‌های امنیتی.
+
+CSP برای اسکریپت 'unsafe-inline' را نگه می‌دارد چون ۱۱۷ هندلر درون‌خطی
+onclick در index.html وجود دارد و nonce یا hash نمی‌تواند جای آن را بگیرد.
+HSTS عمداً نیست: سرور روی HTTP محلی اجرا می‌شود و HSTS تنها بر بستر HTTPS
+معنا دارد.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler

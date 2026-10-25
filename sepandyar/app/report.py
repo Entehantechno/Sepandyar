@@ -1,4 +1,12 @@
-"""سپندیار — report"""
+"""سپندیار — report
+
+ساخت HTML گزارشِ سمت سرور.
+
+این تنها خروجی HTML سمت سرور است (/share/<token>) و در باگ‌یابی دور دوازدهم
+هشت درون‌گذاری خام در آن پیدا شد که XSS ذخیره‌شده می‌ساخت. اکنون هر مقدار
+پیش از درون‌گذاری از _e() می‌گذرد و یک پیمایش AST نبودِ درون‌گذاری خام را
+قطعی می‌سنجد.
+"""
 import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, hmac, threading, html, math, urllib.request as ureq, urllib.error as uerr
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
