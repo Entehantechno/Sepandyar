@@ -4,6 +4,32 @@ import json, sqlite3, os, uuid, datetime, hashlib, re, difflib, time, secrets, h
 from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, quote, unquote, parse_qs
+# ===================== بخش ۱: پیکربندی، زمان، و ابزار پایه =====================
+# منطقهٔ زمانی و ساعت دیواری کاربر این‌جا تعریف می‌شود، چون منطق روزانه
+# (یادآوری دارو، پنجرهٔ سکوت، تاریخ «امروز») به آن وابسته است.
+# ============================================================================
+#  سپندیار — سرور API
+# ----------------------------------------------------------------------------
+#  این فایل در چهارده بخش خوانده می‌شود. جست‌وجوی «بخش N» شما را به ابتدای
+#  هر بخش می‌برد. ترتیب، ترتیب وابستگی است: هر بخش فقط از بخش‌های پیش از
+#  خودش استفاده می‌کند.
+#
+#   بخش ۱  پیکربندی، زمان، و ابزار پایه
+#   بخش ۲  پایگاه‌داده: اتصال، PRAGMAها و طرحواره
+#   بخش ۳  لایهٔ HTTP: بدنهٔ درخواست، پاسخ، و پاک‌سازی ورودی
+#   بخش ۴  علائم حیاتی: آستانه‌ها، خط پایه و تشخیص انحراف
+#   بخش ۵  حافظهٔ مکالمه و فراخوانی مدل زبانی
+#   بخش ۶  پیش‌دستی: پرامپت‌های زمان‌دار و زمان‌بند پس‌زمینه
+#   بخش ۷  ابزار دامنه: ساعت، پنجرهٔ سکوت، فاصله، اشتراک
+#   بخش ۸  گزارش HTML (تنها صفحهٔ سمت‌سرور)
+#   بخش ۹  لایهٔ زبان: گویش و لهجه، ابهام‌زدایی تصویری، ریسک
+#   بخش ۱۰ موتور گفت‌وگوی زنده (Gemini Live)
+#   بخش ۱۱ مراقب، هشدار و رضایت
+#   بخش ۱۲ امنیت: مسیرهای ایستا، CSP و سرآیندها
+#   بخش ۱۳ هندلر HTTP و همهٔ مسیرهای API
+#   بخش ۱۴ نقطهٔ ورود
+# ============================================================================
+
 ROOT=os.path.dirname(__file__); DB=os.path.join(ROOT,'sepandyar.db')
 def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat()
 # «الان» به ساعت دیواری کاربر. پیش از این چهار محل منطق روزانه از
@@ -49,6 +75,7 @@ def insert_transaction(c,tid,kind,amount,description,key):
   # و نباید بی‌صدا به بازپخش تبدیل شود.
   if row is None: raise
   return False,row['id']
+# ================= بخش ۲: پایگاه‌داده — اتصال، PRAGMAها و طرحواره =================
 def db(h=None):
  # اتصال روی هندلر ثبت می‌شود تا در پایان درخواست بسته شود؛
  # وگرنه خطای وسط تراکنش، قفل نوشتن را رها می‌کند و کل پایگاه‌داده قفل می‌شود
@@ -143,10 +170,15 @@ def db(h=None):
   c.execute('ALTER TABLE transactions ADD COLUMN idempotency_key TEXT')
   c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_idempotency ON transactions(idempotency_key)')
  c.execute('INSERT OR IGNORE INTO wallet(id,balance,currency) VALUES(1,1250000,"IRR")')
- c.execute('INSERT OR IGNORE INTO ai_config(id,provider,base_url,model,stt_provider,tts_provider,system_prompt,guardrails,voice_id,tone,temperature,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?,?,?)',('openrouter','https://openrouter.ai/api/v1','openai/gpt-4o-mini','whisper','native-tts','تو یک دستیار فارسی محترم، کوتاه‌گو و شفاف برای سالمندان هستی.','هرگز تشخیص قطعی، تغییر دوز دارو، پرداخت یا تماس اضطراری را بدون تأیید انجام نده. در ابهام سؤال روشن‌کننده بپرس.','friendly_fa','گرم، آرام، کوتاه و غیرکودکانه',0.2,now()))
+ c.execute('INSERT OR IGNORE INTO ai_config(id,provider,base_url,model,stt_provider,tts_provider,system_prompt,guardrails,voice_id,tone,temperature,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?,?,?)',
+   ('openrouter','https://openrouter.ai/api/v1','openai/gpt-4o-mini','whisper','native-tts','تو یک دستیار فارسی محترم، کوتاه‌گو و شفاف برای سالمندان هستی.','هرگز تشخیص قطعی، تغییر دوز دارو، پرداخت یا تماس اضطراری را بدون تأیید انجام نده. در ابهام سؤال روشن‌کننده بپرس.','friendly_fa','گرم، آرام، کوتاه و غیرکودکانه',0.2,now()))
  c.execute('INSERT OR IGNORE INTO reminder_settings(id,quiet_start,quiet_end,max_nudges,preferred_channel,updated_at) VALUES(1,?,?,?,?,?)',('22:00','07:00',2,'voice',now()))
  edu=[('medication_adherence','دارو','پایبندی دارویی','داروها را سر همان ساعت و با همان مقدار که پزشک نوشته مصرف کنید. اگر یک نوبت را فراموش کردید، مقدار را دو برابر نکنید؛ فقط به من بگویید تا ثبت کنم و به مراقب شما اطلاع دهم.','نمونه اولیه — نیازمند تأیید پزشک'),
-      ('blood_pressure','فشار خون','اندازه‌گیری در خانه','فشار خون را در حالت نشسته و پس از پنج دقیقه استراحت اندازه بگیرید و بازو هم‌سطح قلب باشد. مقدار را با صدا به من بگویید تا در پرونده ثبت شود.','نمونه اولیه — نیازمند تأیید پزشک'),
+      ('blood_pressure',
+        'فشار خون',
+        'اندازه‌گیری در خانه',
+        'فشار خون را در حالت نشسته و پس از پنج دقیقه استراحت اندازه بگیرید و بازو هم‌سطح قلب باشد. مقدار را با صدا به من بگویید تا در پرونده ثبت شود.',
+        'نمونه اولیه — نیازمند تأیید پزشک'),
       ('salt_diet','تغذیه','نمک کمتر','مصرف نمکدان را سر سفره کنار بگذارید و به‌جای آن از سبزی معطر، لیمو و ادویه استفاده کنید. غذاهای کنسروی و شور را کمتر کنید.','نمونه اولیه — نیازمند تأیید پزشک'),
       ('walking','فعالیت بدنی','حرکت روزانه','روزی چند بار کوتاه راه رفتن در خانه یا حیاط، به‌همراه کسی یا با تکیه‌گاه مطمئن، بهتر از یک پیاده‌روی طولانی و خسته‌کننده است.','نمونه اولیه — نیازمند تأیید پزشک'),
       ('hydration','آب','نوشیدن آب','در طول روز جرعه‌جرعه آب بنوشید، حتی وقتی تشنه نیستید. اگر پزشک برای شما محدودیت مایعات تعیین کرده، همان مقدار را رعایت کنید.','نمونه اولیه — نیازمند تأیید پزشک'),
@@ -165,7 +197,11 @@ def db(h=None):
  for lvl,act,reply,pats in rules:
   for pat in pats: c.execute('INSERT OR IGNORE INTO safety_rules(id,level,pattern,action,reply,updated_at) VALUES(?,?,?,?,?,?)',(lvl+'::'+pat,lvl,pat,act,reply,now()))
  apps=[('com.snappfood','اسنپ‌فود','خرید','🛍️',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'جست‌وجو','timeout_ms':9000},{'type':'input_text','payload':'شیر کم‌چرب','timeout_ms':6000},{'type':'tap_text','payload':'افزودن به سبد','timeout_ms':12000},{'type':'tap_text','payload':'سبد خرید','timeout_ms':9000}]),
-       ('cab.snapp.passenger','اسنپ','تاکسی','🚕',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'کجا می‌روید','timeout_ms':9000},{'type':'input_text','payload':'خیابان ولیعصر','timeout_ms':6000},{'type':'tap_text','payload':'درخواست خودرو','timeout_ms':12000}]),
+       ('cab.snapp.passenger',
+         'اسنپ',
+         'تاکسی',
+         '🚕',
+         [{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'کجا می‌روید','timeout_ms':9000},{'type':'input_text','payload':'خیابان ولیعصر','timeout_ms':6000},{'type':'tap_text','payload':'درخواست خودرو','timeout_ms':12000}]),
        ('com.android.chrome','کروم','مرورگر','🌐',[{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'جست‌وجو یا وارد کردن نشانی','timeout_ms':9000},{'type':'input_text','payload':'نوبت پزشک','timeout_ms':6000}])]
  for pkg,label,cat,icon,steps in apps: c.execute('INSERT OR IGNORE INTO approved_apps VALUES(?,?,?,?,?,?,?)',(pkg,label,cat,icon,json.dumps({'steps':steps},ensure_ascii=False),1,now()))
  lex=[('meds','داروهای من','meds',['دارو','قرص','داروها','داروی من','داروهایم'],'medicine pills blister pack on table',90),
@@ -211,6 +247,9 @@ def db(h=None):
   ('kermani','سی','برای','لهجه کرمانی'),('kermani','میرم','می‌روم','لهجه کرمانی')]
  for i,(acc,var,can,note) in enumerate(dia): c.execute('INSERT OR IGNORE INTO dialect_lexicon VALUES(?,?,?,?,?)',('dl%d'%i,acc,var,can,note))
  c.commit(); return c
+# ============ بخش ۳: لایهٔ HTTP — بدنهٔ درخواست، پاسخ، و پاک‌سازی ورودی ============
+# هر تجزیه و اعتبارسنجی ورودی در همین بخش انجام می‌شود («تجزیه در مرز»)،
+# تا کسب‌وکار پایین‌تر هرگز مقدار خام یا نامعتبر نبیند.
 _SURR=re.compile(r'[\ud800-\udfff]')
 def desurrogate(v):
  """سورگیت جفت‌نشده را با U+FFFD جایگزین می‌کند.
@@ -258,7 +297,13 @@ def body(h):
   h._body_error=True
   return {}
 def send(h,code,obj):
- raw=json.dumps(obj,ensure_ascii=False).encode(); h.send_response(code); h.send_header('Content-Type','application/json; charset=utf-8'); h.send_header('Content-Length',str(len(raw))); h.send_header('Access-Control-Allow-Origin','*'); h.end_headers(); h.wfile.write(raw)
+ raw=json.dumps(obj,ensure_ascii=False).encode()
+ h.send_response(code)
+ h.send_header('Content-Type','application/json; charset=utf-8')
+ h.send_header('Content-Length',str(len(raw)))
+ h.send_header('Access-Control-Allow-Origin','*')
+ h.end_headers()
+ h.wfile.write(raw)
 def rows(c,sql,args=()): return [dict(x) for x in c.execute(sql,args).fetchall()]
 def num(v):
  try: x=float(v)
@@ -268,6 +313,7 @@ def num(v):
  # پس یک ورودی زباله «هشدار بحرانی سلامت» جعلی می‌ساخت و صف مراقب را پر می‌کرد.
  # اندازه‌گیری شد: سه POST با 1e400 → سه هشدار vital_critical.
  return x if math.isfinite(x) else None
+# ================ بخش ۴: علائم حیاتی — آستانه‌ها، خط پایه و انحراف ================
 def evaluate_vital(c,kind,value):
  vals=[]
  if kind=='blood_pressure' and isinstance(value,dict): vals=[('systolic',num(value.get('systolic'))),('diastolic',num(value.get('diastolic')))]
@@ -290,6 +336,7 @@ def evaluate_vital(c,kind,value):
   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vital_alert',json.dumps({'alert_id':aid,'results':results},ensure_ascii=False),now()))
   c.commit()
  return {'status':'critical' if critical else ('out_of_range' if abnormal else 'normal'),'results':results,'notify_senior':abnormal,'notify_caregivers':abnormal,'request_emergency_call':critical}
+# ================== بخش ۵: حافظهٔ مکالمه و فراخوانی مدل زبانی ==================
 # --- حافظهٔ مکالمه ---
 # تحقیق رقبا نشان داد حافظه همان متغیری است که نتیجه را می‌سازد: کاهش تنهایی
 # ۲۳٪ با حافظه در برابر ۴٪ بدون آن. پیش از این، گفتگو هیچ‌جا ذخیره نمی‌شد و
@@ -342,6 +389,7 @@ def call_llm(c,user_text,context=None,pid='default'):
   with ureq.urlopen(req,timeout=25) as r:
    data=json.loads(r.read()); return data.get('choices',[{}])[0].get('message',{}).get('content')
  except Exception: return None
+# ============== بخش ۶: پیش‌دستی — پرامپت‌های زمان‌دار و زمان‌بند پس‌زمینه ==============
 PROACTIVE_PROMPTS=[('morning_checkin','09:00','صبح بخیر. حال روحی و انرژی امروزتان چطور است؟'),
                    ('blood_pressure','09:30','اگر آماده‌اید، لطفاً فشار خونتان را بگیرید و عددش را به من بگویید.'),
                    ('evening_checkin','20:00','امروز حالتان چطور گذشت؟ درد یا ناراحتی جدیدی دارید؟')]
@@ -430,6 +478,7 @@ def detect_deviation_alerts(c,report=None):
   made.append(aid)
  c.commit(); return made
 
+# ================= بخش ۷: ابزار دامنه — ساعت، سکوت، فاصله، اشتراک =================
 def as_hhmm(v):
  """مرز ورودی: HH:MM را تجزیه می‌کند و اگر معتبر نبود None می‌دهد.
  پیش از این مقدار خام در پایگاه‌داده ذخیره می‌شد و خواننده‌اش با
@@ -455,6 +504,9 @@ def share_payload(c,token):
  if not s or s['expires_at']<now(): return None
  profile=c.execute('SELECT name,age,needs FROM profile WHERE id=1').fetchone()
  return {'share_token':token,'expires_at':s['expires_at'],'profile':dict(profile) if profile else {},'vitals':rows(c,'SELECT type,value,source,measured_at FROM vitals ORDER BY measured_at DESC LIMIT 100'),'medications':[]}
+# ==================== بخش ۸: گزارش HTML (تنها صفحهٔ سمت‌سرور) ====================
+# این تنها جایی است که سرور HTML تولید می‌کند؛ پس تنها جایی است که
+# فرار HTML باید دستی انجام شود. _e() هر درون‌گذاری را می‌پوشاند.
 def _e(v):
  # هر مقداری که درون HTML درون‌ریزی می‌شود باید escape شود. این گزارش با
  # f-string ساخته می‌شود و هیچ موتور قالبی در کار نیست، پس autoescape
@@ -471,6 +523,7 @@ def report_html(data):
  p=data.get('profile') or {}; items=data.get('vitals') or []
  tr=''.join(f"<tr><td>{_e(x.get('type'))}</td><td>{_e(x.get('value'))}</td><td>{_e(x.get('source'))}</td><td>{_e(x.get('measured_at'))}</td></tr>" for x in items)
  return f'''<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><title>گزارش سلامت — سپندیار</title><style>body{{font-family:Tahoma,Arial;max-width:900px;margin:30px auto;padding:0 18px;color:#18312f}}h1{{color:#347d6d}}table{{width:100%;border-collapse:collapse}}td,th{{padding:12px;border-bottom:1px solid #dfe9e4;text-align:right}}.note{{background:#eef8f3;padding:14px;border-radius:12px}}</style><h1>گزارش علائم حیاتی</h1><div class="note">این لینک تا {_e(data['expires_at'])} معتبر است. اطلاعات با اجازه سالمند به اشتراک گذاشته شده است.</div><h2>{_e(p.get('name','سالمند'))}</h2><p>سن: {_e(p.get('age','ثبت نشده'))} — شرایط ثبت‌شده: {_e(p.get('needs','ثبت نشده'))}</p><table><tr><th>نوع</th><th>مقدار</th><th>منبع</th><th>زمان</th></tr>{tr}</table><p style="color:#71807c">این گزارش جایگزین تشخیص پزشک نیست.</p></html>'''
+# ============= بخش ۹: لایهٔ زبان — گویش و لهجه، ابهام‌زدایی تصویری، ریسک =============
 def normalize_fa(t): return str(t or '').replace('ي','ی').replace('ك','ک')
 # ---- رفع ابهام گفتار سالمند با تصویر (پژوهش‌محور: پرسش کوتاه، تأییدی، بدون نام فنی) ----
 IMAGE_UA='Sepandyar/0.3 (elderly voice assistant; contact: team@sepandyar.local)'
@@ -522,6 +575,7 @@ def get_voice_profile(c,pid='default'):
  r=c.execute('SELECT * FROM voice_profiles WHERE id=?',(pid,)).fetchone()
  if r: return dict(r)
  return {'id':pid,'name':'کاربر','dialect':'standard','secondary_dialect':'','patience_ms':DEFAULT_PATIENCE_MS,'confidence_floor':0.55,'calibrated':0,'updated_at':None}
+# ==================== بخش ۱۰: موتور گفت‌وگوی زنده (Gemini Live) ====================
 # ---- موتور گفت‌وگوی زنده (Live) — برگزیده از پژوهش docs/RESEARCH_LIVE_VOICE_AI_FA.md ----
 LIVE_TOKEN_URL='https://generativelanguage.googleapis.com/v1beta/auth_tokens'
 LIVE_WS_BASE='wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained'
@@ -679,6 +733,8 @@ def fetch_images(c,query,count=2):
  try: c.execute('INSERT INTO image_cache VALUES(?,?,?,?)',(q,json.dumps(items,ensure_ascii=False),source,now()))
  except sqlite3.IntegrityError: c.execute('UPDATE image_cache SET items=?,source=?,fetched_at=? WHERE query=?',(json.dumps(items,ensure_ascii=False),source,now(),q))
  c.commit(); return items
+# ======================== بخش ۱۱: مراقب، هشدار و رضایت ========================
+# احراز هویت مراقب، صف اقدام‌ها، هشدارها و بررسی رضایت سالمند.
 FA_CLITICS=('مان','تان','شان','های','ها','ام','ات','ش','م','ی','ای')
 def _stem(w):
  w=norm_fa(w).replace('\u200c','')
@@ -714,7 +770,8 @@ def open_alert_once(c,atype,message,severity='normal'):
  دو فراخوانی همزمان نمی‌توانند هر دو ردیف بسازند. اگر ساخته نشد None می‌دهد.
  (الگوی قبلی «اول SELECT بعد INSERT» بود و زیر بار همزمان هشدار تکراری می‌ساخت.)"""
  aid=str(uuid.uuid4())
- cur=c.execute("INSERT INTO alerts(id,type,message,severity,status,created_at) SELECT ?,?,?,?,'open',? WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE type=? AND status='open')",(aid,atype,message,severity,now(),atype))
+ cur=c.execute("INSERT INTO alerts(id,type,message,severity,status,created_at) SELECT ?,?,?,?,'open',? WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE type=? AND status='open')",
+   (aid,atype,message,severity,now(),atype))
  return aid if cur.rowcount else None
 def consent_granted(c,scope='health'):
  r=c.execute('SELECT granted FROM consents WHERE scope=?',(scope,)).fetchone(); return bool(r and r['granted'])
@@ -741,6 +798,9 @@ def primary_caregiver(c):
 # (آزمودم: «/..%2fserver.py» → ۲۰۰ با کل کد منبع). پس allowlist روی مسیر
 # decode‌شده سنجیده می‌شود و هر چیز دیگر ۴۰۴ می‌گیرد؛ فهرست پوشه هم
 # خودبه‌خود بسته می‌شود چون هیچ مسیری به آن ختم نمی‌شود.
+# ====================== بخش ۱۲: امنیت — مسیرهای ایستا، CSP و سرآیندها ======================
+# سرآیندها در یک گلوگاه واحد (end_headers) تزریق می‌شوند تا هیچ مسیری
+# بی‌سرآیند نماند، از جمله ۴۰۴.
 STATIC_ALLOW=frozenset({'/','/index.html','/caregiver.html','/admin.html',
                         '/investor.html','/sw.js','/manifest.webmanifest'})
 # --- سرآیندهای امنیتی: روی «هر» پاسخ ---
@@ -769,6 +829,9 @@ SECURITY_HEADERS=(('Content-Security-Policy',CSP),
  # getCurrentPosition در caregiver.html استفاده می‌شوند. قاعدهٔ پژوهش هم همان است:
  # فقط قابلیتی را ببند که استفاده نمی‌کنی.
  ('Permissions-Policy','camera=(), payment=(), usb=(), magnetometer=(), bluetooth=(), display-capture=(), interest-cohort=()'))
+# ================= بخش ۱۳: هندلر HTTP و همهٔ مسیرهای API =================
+# هر مسیر یک «if p==...» است. مسیرهای /api/caregiver/* باید caregiver_session()
+# را صدا بزنند؛ آزمون بخش ۲۳ این قاعده را به‌طور ساختاری پاس می‌دارد.
 class Handler(SimpleHTTPRequestHandler):
  # تایم‌اوت سوکت، وگرنه هر اتصال نیمه‌باز یک رشته را برای همیشه نگه می‌دارد.
  # timeout در زنجیرهٔ ارث None است و StreamRequestHandler.setup() فقط وقتی آن
@@ -834,7 +897,13 @@ class Handler(SimpleHTTPRequestHandler):
   if p.startswith('/share/'):
    token=p.split('/')[-1]; data=share_payload(c,token)
    if not data: self.send_error(404,'share_not_found'); return
-   raw=report_html(data).encode(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw); return
+   raw=report_html(data).encode()
+   self.send_response(200)
+   self.send_header('Content-Type','text/html; charset=utf-8')
+   self.send_header('Content-Length',str(len(raw)))
+   self.end_headers()
+   self.wfile.write(raw)
+   return
   if p=='/api/vitals/shares': return send(self,200,{'items':rows(c,'SELECT token,scope,expires_at,revoked,created_at FROM shares ORDER BY created_at DESC')})
   if p.startswith('/api/vitals/share/'):
    data=share_payload(c,p.split('/')[-1]); return send(self,200,data) if data else send(self,404,{'error':'share_not_found'})
@@ -852,7 +921,9 @@ class Handler(SimpleHTTPRequestHandler):
     items.append(it)
    return send(self,200,{'items':items})
   if p=='/api/wallet':
-   w=dict(c.execute('SELECT * FROM wallet WHERE id=1').fetchone()); w['transactions']=rows(c,'SELECT id,kind,amount,description,created_at FROM transactions ORDER BY created_at DESC LIMIT 50'); return send(self,200,w)
+   w=dict(c.execute('SELECT * FROM wallet WHERE id=1').fetchone())
+   w['transactions']=rows(c,'SELECT id,kind,amount,description,created_at FROM transactions ORDER BY created_at DESC LIMIT 50')
+   return send(self,200,w)
   if p=='/api/medications': return send(self,200,{'items':rows(c,'SELECT * FROM medications ORDER BY time')})
   if p.startswith('/api/medications/') and p.endswith('/details'):
    mid=p.split('/')[3]; r=c.execute('SELECT * FROM medication_details WHERE medication_id=?',(mid,)).fetchone(); return send(self,200,dict(r) if r else {})
@@ -863,7 +934,11 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/proactive/due':
    return send(self,200,{'items':collect_due_prompts(c),'escalated':escalate_stale_prompts(c),'checked_at':now()})
   if p=='/api/reminders/due':
-   current=local_now().strftime('%H:%M'); today=local_now().date().isoformat(); due=[]; settings=c.execute('SELECT * FROM reminder_settings WHERE id=1').fetchone(); quiet=in_quiet_window(current,settings['quiet_start'],settings['quiet_end']) if settings else False
+   current=local_now().strftime('%H:%M')
+   today=local_now().date().isoformat()
+   due=[]
+   settings=c.execute('SELECT * FROM reminder_settings WHERE id=1').fetchone()
+   quiet=in_quiet_window(current,settings['quiet_start'],settings['quiet_end']) if settings else False
    if not quiet:
     for m in c.execute("SELECT * FROM medications WHERE id NOT IN (SELECT medication_id FROM medication_logs WHERE log_date=? AND event='taken')",(today,)).fetchall():
      try:
@@ -886,7 +961,12 @@ class Handler(SimpleHTTPRequestHandler):
     c.commit()
    return send(self,200,{'items':due,'checked_at':now(),'quiet_hours':quiet})
   if p=='/api/care-circle/summary':
-   prof=c.execute('SELECT name,age,needs FROM profile WHERE id=1').fetchone(); today=local_now().date().isoformat(); meds=rows(c,"SELECT m.id,m.name,m.time,COALESCE(l.event,'pending') AS status FROM medications m LEFT JOIN medication_logs l ON l.medication_id=m.id AND l.log_date=? ORDER BY m.time",(today,)); alerts=rows(c,"SELECT id,type,message,severity,status,created_at FROM alerts WHERE status='open' ORDER BY created_at DESC LIMIT 20"); vit=c.execute("SELECT type,value,measured_at FROM vitals ORDER BY measured_at DESC LIMIT 1").fetchone(); return send(self,200,{'profile':dict(prof) if prof else {},'medications':meds,'open_alerts':alerts,'last_vital':dict(vit) if vit else None,'caregivers':rows(c,'SELECT name,phone,role FROM caregivers'),'tasks':rows(c,"SELECT * FROM care_tasks WHERE status!='done' ORDER BY due_at"),'last_checkin':dict(c.execute('SELECT * FROM checkins ORDER BY created_at DESC LIMIT 1').fetchone()) if c.execute('SELECT COUNT(*) FROM checkins').fetchone()[0] else None})
+   prof=c.execute('SELECT name,age,needs FROM profile WHERE id=1').fetchone()
+   today=local_now().date().isoformat()
+   meds=rows(c,"SELECT m.id,m.name,m.time,COALESCE(l.event,'pending') AS status FROM medications m LEFT JOIN medication_logs l ON l.medication_id=m.id AND l.log_date=? ORDER BY m.time",(today,))
+   alerts=rows(c,"SELECT id,type,message,severity,status,created_at FROM alerts WHERE status='open' ORDER BY created_at DESC LIMIT 20")
+   vit=c.execute("SELECT type,value,measured_at FROM vitals ORDER BY measured_at DESC LIMIT 1").fetchone()
+   return send(self,200,{'profile':dict(prof) if prof else {},'medications':meds,'open_alerts':alerts,'last_vital':dict(vit) if vit else None,'caregivers':rows(c,'SELECT name,phone,role FROM caregivers'),'tasks':rows(c,"SELECT * FROM care_tasks WHERE status!='done' ORDER BY due_at"),'last_checkin':dict(c.execute('SELECT * FROM checkins ORDER BY created_at DESC LIMIT 1').fetchone()) if c.execute('SELECT COUNT(*) FROM checkins').fetchone()[0] else None})
   if p=='/api/care-tasks': return send(self,200,{'items':rows(c,'SELECT * FROM care_tasks ORDER BY due_at')})
   if p=='/api/checkins': return send(self,200,{'items':rows(c,'SELECT * FROM checkins ORDER BY created_at DESC LIMIT 30')})
   if p=='/api/icope': return send(self,200,{'items':rows(c,'SELECT * FROM icope_assessments ORDER BY assessed_at DESC')})
@@ -907,15 +987,20 @@ class Handler(SimpleHTTPRequestHandler):
    r=c.execute('SELECT * FROM locations ORDER BY created_at DESC LIMIT 1').fetchone(); return send(self,200,dict(r) if r else {})
   if p=='/api/safe-zones': return send(self,200,{'items':rows(c,'SELECT * FROM safe_zones WHERE enabled=1 ORDER BY name')})
   if p=='/api/admin/overview':
-   w=c.execute('SELECT balance FROM wallet WHERE id=1').fetchone(); return send(self,200,{'users':1,'caregivers':c.execute('SELECT COUNT(*) FROM caregivers').fetchone()[0],'medications':c.execute('SELECT COUNT(*) FROM medications').fetchone()[0],'vitals':c.execute('SELECT COUNT(*) FROM vitals').fetchone()[0],'open_alerts':c.execute("SELECT COUNT(*) FROM alerts WHERE status='open'").fetchone()[0],'transactions':c.execute('SELECT COUNT(*) FROM transactions').fetchone()[0],'wallet_balance':w['balance'] if w else 0,'health_checks':{'api':'ok','database':'ok','reminders':'ok'}})
+   w=c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()
+   return send(self,200,{'users':1,'caregivers':c.execute('SELECT COUNT(*) FROM caregivers').fetchone()[0],'medications':c.execute('SELECT COUNT(*) FROM medications').fetchone()[0],'vitals':c.execute('SELECT COUNT(*) FROM vitals').fetchone()[0],'open_alerts':c.execute("SELECT COUNT(*) FROM alerts WHERE status='open'").fetchone()[0],'transactions':c.execute('SELECT COUNT(*) FROM transactions').fetchone()[0],'wallet_balance':w['balance'] if w else 0,'health_checks':{'api':'ok','database':'ok','reminders':'ok'}})
   if p=='/api/admin/activity': return send(self,200,{'items':rows(c,'SELECT type,payload,created_at FROM events ORDER BY created_at DESC LIMIT 100')})
   if p=='/api/admin/ai-config':
-   r=c.execute('SELECT provider,base_url,model,stt_provider,tts_provider,system_prompt,guardrails,voice_id,tone,temperature,updated_at FROM ai_config WHERE id=1').fetchone(); return send(self,200,dict(r) if r else {})
+   r=c.execute('SELECT provider,base_url,model,stt_provider,tts_provider,system_prompt,guardrails,voice_id,tone,temperature,updated_at FROM ai_config WHERE id=1').fetchone()
+   return send(self,200,dict(r) if r else {})
   if p=='/api/admin/ai-test': return send(self,200,{'ok':True,'provider':'configured','message':'تنظیمات AI آماده استفاده هستند.'})
   if p=='/api/realtime/session':
    key=os.getenv('OPENAI_API_KEY','')
    if not key: return send(self,503,{'error':'realtime_not_configured','message':'OPENAI_API_KEY در محیط سرور ثبت نشده است.'})
-   cfg=c.execute('SELECT * FROM ai_config WHERE id=1').fetchone(); model=(cfg['model'] if cfg and cfg['model'] else 'gpt-realtime-2.1'); tone=(cfg['tone'] if cfg else 'گرم و کوتاه'); prompt=(cfg['system_prompt'] if cfg else 'دستیار فارسی سالمندان هستی.')+'\nلحن: '+tone+'\nGuardrails: '+(cfg['guardrails'] if cfg else '')+'\nهمیشه به فارسی معیار ایران با تلفظ تهرانی صحبت کن، نه دری افغانی.'
+   cfg=c.execute('SELECT * FROM ai_config WHERE id=1').fetchone()
+   model=(cfg['model'] if cfg and cfg['model'] else 'gpt-realtime-2.1')
+   tone=(cfg['tone'] if cfg else 'گرم و کوتاه')
+   prompt=(cfg['system_prompt'] if cfg else 'دستیار فارسی سالمندان هستی.')+'\nلحن: '+tone+'\nGuardrails: '+(cfg['guardrails'] if cfg else '')+'\nهمیشه به فارسی معیار ایران با تلفظ تهرانی صحبت کن، نه دری افغانی.'
    # صبر گفتاری کاربر باید به خودِ مدل برسد. semantic_vad پارامترهای زمانی را نمی‌پذیرد،
    # پس server_vad با silence_duration_ms برابر patience_ms پروفایل کاربر.
    rpid=parse_qs(urlparse(self.path).query).get('id',['default'])[0]
@@ -946,13 +1031,27 @@ class Handler(SimpleHTTPRequestHandler):
    it=rows(c,"SELECT id,topic,category,body,approved_by FROM education_content WHERE status='approved' ORDER BY RANDOM() LIMIT 1"); return send(self,200,{'item':it[0] if it else None})
   if p=='/api/education': return send(self,200,{'items':rows(c,'SELECT * FROM education_content ORDER BY category,topic')})
   if p.startswith('/api/education/'):
-   r=c.execute("SELECT * FROM education_content WHERE id=? AND status='approved'",(p.split('/')[3],)).fetchone(); return send(self,200,dict(r)) if r else send(self,404,{'error':'content_not_found_or_not_approved'})
+   r=c.execute("SELECT * FROM education_content WHERE id=? AND status='approved'",(p.split('/')[3],)).fetchone()
+   return send(self,200,dict(r)) if r else send(self,404,{'error':'content_not_found_or_not_approved'})
   if p=='/api/symptoms/catalog': return send(self,200,{'items':rows(c,'SELECT name,escalate FROM symptom_catalog ORDER BY sort_order')})
   if p=='/api/symptoms': return send(self,200,{'items':rows(c,'SELECT * FROM symptom_reports ORDER BY created_at DESC LIMIT 50')})
   if p=='/api/safety/rules': return send(self,200,{'items':rows(c,'SELECT level,pattern,action,reply FROM safety_rules ORDER BY level,pattern')})
   if p=='/api/dialects':
    acc=rows(c,"SELECT accent,COUNT(*) AS entries FROM dialect_lexicon GROUP BY accent ORDER BY entries DESC")
-   known={'mashhadi':'مشهدی/خراسانی','yazdi':'یزدی','shirazi':'شیرازی','isfahani':'اصفهانی','azeri':'ترکی/آذری','kurdish':'کردی','lori':'لری','shomali':'شمالی (گیلکی/مازندرانی)','jonubi':'جنوبی/بندری','baluchi':'بلوچی','dari':'دری','kermani':'کرمانی','colloquial':'محاوره عمومی','standard':'فارسی معیار'}
+   known={'mashhadi':'مشهدی/خراسانی',
+     'yazdi':'یزدی',
+     'shirazi':'شیرازی',
+     'isfahani':'اصفهانی',
+     'azeri':'ترکی/آذری',
+     'kurdish':'کردی',
+     'lori':'لری',
+     'shomali':'شمالی (گیلکی/مازندرانی)',
+     'jonubi':'جنوبی/بندری',
+     'baluchi':'بلوچی',
+     'dari':'دری',
+     'kermani':'کرمانی',
+     'colloquial':'محاوره عمومی',
+     'standard':'فارسی معیار'}
    # دقت نسبی از بنچمارک PSRB (SW-WER میانگین ده سامانه؛ عدد کمتر بهتر)
    psrb={'kurdish':36.7,'mashhadi':53.3,'shirazi':43.8,'shomali':41.8,'standard':None}
    return send(self,200,{'items':[{'accent':a['accent'],'label':known.get(a['accent'],a['accent']),'entries':a['entries'],'psrb_sw_wer':psrb.get(a['accent']),'patience_ms':get_voice_profile(c)['patience_ms']} for a in acc],'source':'PSRB (arXiv:2505.21230) + PDID (arXiv:2510.09528)'})
@@ -1049,13 +1148,21 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/consents':
    scope=d.get('scope','');
    if scope not in ('health','wallet','screen_control','voice_profile','emergency_call'): return send(self,400,{'error':'invalid_scope'})
-   c.execute('INSERT INTO consents(scope,granted,confirmed_by_voice,updated_at,updated_by) VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET granted=excluded.granted,confirmed_by_voice=excluded.confirmed_by_voice,updated_at=excluded.updated_at,updated_by=excluded.updated_by',(scope,int(bool(d.get('granted'))),int(bool(d.get('confirmed_by_voice'))),now(),d.get('updated_by','senior'))); c.commit(); return send(self,200,{'ok':True})
+   c.execute('INSERT INTO consents(scope,granted,confirmed_by_voice,updated_at,updated_by) VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET granted=excluded.granted,confirmed_by_voice=excluded.confirmed_by_voice,updated_at=excluded.updated_at,updated_by=excluded.updated_by',(scope,int(bool(d.get('granted'))),int(bool(d.get('confirmed_by_voice'))),now(),d.get('updated_by','senior')))
+   c.commit()
+   return send(self,200,{'ok':True})
   if p=='/api/care-tasks':
-   tid=str(uuid.uuid4()); c.execute('INSERT INTO care_tasks VALUES(?,?,?,?,?,?,?)',(tid,d.get('title',''),d.get('kind','routine'),d.get('assigned_to','senior'),d.get('due_at',''), 'pending',now())); c.commit(); return send(self,201,{'id':tid,'ok':True})
+   tid=str(uuid.uuid4())
+   c.execute('INSERT INTO care_tasks VALUES(?,?,?,?,?,?,?)',(tid,d.get('title',''),d.get('kind','routine'),d.get('assigned_to','senior'),d.get('due_at',''), 'pending',now()))
+   c.commit()
+   return send(self,201,{'id':tid,'ok':True})
   if p.startswith('/api/care-tasks/') and p.endswith('/complete'):
    tid=p.split('/')[3]; c.execute("UPDATE care_tasks SET status='done' WHERE id=?",(tid,)); c.commit(); return send(self,200,{'ok':True})
   if p=='/api/checkins':
-   cid=str(uuid.uuid4()); c.execute('INSERT INTO checkins VALUES(?,?,?,?,?,?)',(cid,d.get('mood',''),d.get('pain',''),d.get('sleep',''),d.get('note',''),now())); c.commit(); return send(self,201,{'id':cid,'ok':True})
+   cid=str(uuid.uuid4())
+   c.execute('INSERT INTO checkins VALUES(?,?,?,?,?,?)',(cid,d.get('mood',''),d.get('pain',''),d.get('sleep',''),d.get('note',''),now()))
+   c.commit()
+   return send(self,201,{'id':cid,'ok':True})
   if p=='/api/prescriptions':
    # ورود نسخه با تصویر. دارویاد این را دارد و ۴۱ هزار نصب گرفته؛ ورود دستی دارو
    # بزرگ‌ترین اصطکاک اولیه است و اگر ثبت دارو سخت باشد کاربر از روز اول می‌رود.
@@ -1073,7 +1180,9 @@ class Handler(SimpleHTTPRequestHandler):
     if not isinstance(it,dict): continue
     name=(as_text(it.get('name','')) or '').strip()
     if not name: continue
-    iid=str(uuid.uuid4()); c.execute('INSERT INTO prescription_items VALUES(?,?,?,?,?,?,?,?)',(iid,pid,name[:160],as_text(it.get('dose','')),as_text(it.get('schedule','')),0,None,now())); items.append({'id':iid,'name':name})
+    iid=str(uuid.uuid4())
+    c.execute('INSERT INTO prescription_items VALUES(?,?,?,?,?,?,?,?)',(iid,pid,name[:160],as_text(it.get('dose','')),as_text(it.get('schedule','')),0,None,now()))
+    items.append({'id':iid,'name':name})
    c.commit(); return send(self,201,{'id':pid,'status':'pending','items':items})
   if p.startswith('/api/prescriptions/') and p.endswith('/confirm'):
    # تأیید قلم نسخه ← ساخت داروی واقعی. هیچ‌گاه بی‌تأیید خودکار دارو ساخته نمی‌شود.
@@ -1095,12 +1204,17 @@ class Handler(SimpleHTTPRequestHandler):
    qs=as_hhmm(d.get('quiet_start','22:00')); qe=as_hhmm(d.get('quiet_end','07:00'))
    if qs is None or qe is None:
     return send(self,400,{'error':'invalid_quiet_hours','message':'quiet_start و quiet_end باید به قالب HH:MM باشند.'})
-   c.execute('INSERT INTO reminder_settings(id,quiet_start,quiet_end,max_nudges,preferred_channel,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,max_nudges=excluded.max_nudges,preferred_channel=excluded.preferred_channel,updated_at=excluded.updated_at',(qs,qe,nudges,d.get('preferred_channel','voice'),now())); c.commit(); return send(self,200,{'ok':True,'quiet_start':qs,'quiet_end':qe,'max_nudges':nudges})
+   c.execute('INSERT INTO reminder_settings(id,quiet_start,quiet_end,max_nudges,preferred_channel,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,max_nudges=excluded.max_nudges,preferred_channel=excluded.preferred_channel,updated_at=excluded.updated_at',
+     (qs,qe,nudges,d.get('preferred_channel','voice'),now()))
+   c.commit()
+   return send(self,200,{'ok':True,'quiet_start':qs,'quiet_end':qe,'max_nudges':nudges})
   if p=='/api/icope':
    domain=d.get('domain',''); score=as_float(d.get('score',0))
    # as_float روی ورودی غیرعددی None می‌دهد؛ 0<=None پیش‌تر TypeError و ۵۰۰ می‌داد
    if score is None or domain not in ('locomotion','vitality','vision','hearing','cognition','psychology') or not 0<=score<=10: return send(self,400,{'error':'invalid_icope_assessment'})
-   status='good' if score>=7 else ('watch' if score>=4 else 'needs_support'); iid=str(uuid.uuid4()); c.execute('INSERT INTO icope_assessments VALUES(?,?,?,?,?,?,?)',(iid,domain,score,status,d.get('notes',''),d.get('assessed_by','senior'),now()));
+   status='good' if score>=7 else ('watch' if score>=4 else 'needs_support')
+   iid=str(uuid.uuid4())
+   c.execute('INSERT INTO icope_assessments VALUES(?,?,?,?,?,?,?)',(iid,domain,score,status,d.get('notes',''),d.get('assessed_by','senior'),now()))
    if status=='needs_support': c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(str(uuid.uuid4()),'icope_'+domain,'در حوزه '+domain+' نیاز به حمایت بیشتر ثبت شد.','warning','open',now()))
    c.commit(); return send(self,201,{'id':iid,'status':status,'ok':True})
   if p=='/api/pantry':
@@ -1111,7 +1225,10 @@ class Handler(SimpleHTTPRequestHandler):
    if ai: return send(self,200,{'recipes':[],'spoken_suggestion':ai,'provider':'configured'})
    return send(self,200,{'recipes':[{'name':'املت سبزیجات کم‌نمک','time_min':20,'ingredients':items[:5],'steps':['مواد را خرد کنید','با حرارت ملایم بپزید','نمک را حذف یا بسیار کم کنید'],'note':'مقدار نمک و روغن با شرایط پزشکی سالمند تطبیق داده شود.'},{'name':'سوپ ساده و مقوی','time_min':35,'ingredients':items[:5],'steps':['مواد را بشویید','با آب کافی بپزید','در پایان بافت و دما را بررسی کنید'],'note':'برای دیابت، مقدار نان و کربوهیدرات را با نظر متخصص تنظیم کنید.'}]})
   if p=='/api/contacts':
-   cid=str(uuid.uuid4()); c.execute('INSERT INTO contacts VALUES(?,?,?,?,?)',(cid,d.get('name',''),d.get('phone',''),d.get('relationship','family'),now())); c.commit(); return send(self,201,{'id':cid,'ok':True})
+   cid=str(uuid.uuid4())
+   c.execute('INSERT INTO contacts VALUES(?,?,?,?,?)',(cid,d.get('name',''),d.get('phone',''),d.get('relationship','family'),now()))
+   c.commit()
+   return send(self,201,{'id':cid,'ok':True})
   if p=='/api/messages':
    mid=str(uuid.uuid4()); c.execute('INSERT INTO messages VALUES(?,?,?,?,?,?)',(mid,d.get('contact_id',''),d.get('body',''),d.get('kind','voice'),now(),'queued'))
    aid=enqueue_caregiver_action(c,'message',{'message_id':mid,'contact_id':d.get('contact_id',''),'body':d.get('body',''),'kind':d.get('kind','voice')})
@@ -1121,15 +1238,25 @@ class Handler(SimpleHTTPRequestHandler):
    # (که شکل درخواستِ خودِ کلاینت است) INSERT با NameError می‌ترکد و ۵۰۰ می‌دهد
    aid=str(uuid.uuid4()); provider=d.get('provider',''); location=d.get('location',''); doctor_id=d.get('doctor_id');
    if doctor_id:
-    doc=c.execute('SELECT * FROM doctors WHERE id=?',(doctor_id,)).fetchone(); provider=doc['name'] if doc else provider; location=(doc['clinic']+' — '+doc['address']) if doc and doc['clinic'] else d.get('location','')
+    doc=c.execute('SELECT * FROM doctors WHERE id=?',(doctor_id,)).fetchone()
+    provider=doc['name'] if doc else provider
+    location=(doc['clinic']+' — '+doc['address']) if doc and doc['clinic'] else d.get('location','')
    rmin=as_int(d.get('reminder_minutes',60))
    if rmin is None: return send(self,400,{'error':'invalid_reminder_minutes','message':'reminder_minutes باید عدد باشد.'})
-   c.execute('INSERT INTO appointments VALUES(?,?,?,?,?,?,?,?)',(aid,d.get('title','وقت پزشک'),provider,location,d.get('starts_at',''),rmin, 'scheduled',now())); c.commit(); return send(self,201,{'id':aid,'ok':True,'provider':provider,'location':location})
+   c.execute('INSERT INTO appointments VALUES(?,?,?,?,?,?,?,?)',(aid,d.get('title','وقت پزشک'),provider,location,d.get('starts_at',''),rmin, 'scheduled',now()))
+   c.commit()
+   return send(self,201,{'id':aid,'ok':True,'provider':provider,'location':location})
   if p=='/api/doctors':
-   did=str(uuid.uuid4()); c.execute('INSERT INTO doctors VALUES(?,?,?,?,?,?,?,?)',(did,d.get('name',''),d.get('specialty',''),d.get('phone',''),d.get('address',''),d.get('clinic',''),int(bool(d.get('preferred'))),now())); c.commit(); return send(self,201,{'id':did,'ok':True})
+   did=str(uuid.uuid4())
+   c.execute('INSERT INTO doctors VALUES(?,?,?,?,?,?,?,?)',(did,d.get('name',''),d.get('specialty',''),d.get('phone',''),d.get('address',''),d.get('clinic',''),int(bool(d.get('preferred'))),now()))
+   c.commit()
+   return send(self,201,{'id':did,'ok':True})
   if p=='/api/emergency-card':
    fields=[d.get(k,'') for k in ('full_name','birth_date','blood_type','allergies','conditions','critical_meds','primary_doctor','emergency_contact')]
-   c.execute('INSERT INTO emergency_card(id,full_name,birth_date,blood_type,allergies,conditions,critical_meds,primary_doctor,emergency_contact,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET full_name=excluded.full_name,birth_date=excluded.birth_date,blood_type=excluded.blood_type,allergies=excluded.allergies,conditions=excluded.conditions,critical_meds=excluded.critical_meds,primary_doctor=excluded.primary_doctor,emergency_contact=excluded.emergency_contact,updated_at=excluded.updated_at',(*fields,now())); c.commit(); return send(self,200,{'ok':True})
+   c.execute('INSERT INTO emergency_card(id,full_name,birth_date,blood_type,allergies,conditions,critical_meds,primary_doctor,emergency_contact,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET full_name=excluded.full_name,birth_date=excluded.birth_date,blood_type=excluded.blood_type,allergies=excluded.allergies,conditions=excluded.conditions,critical_meds=excluded.critical_meds,primary_doctor=excluded.primary_doctor,emergency_contact=excluded.emergency_contact,updated_at=excluded.updated_at',
+     (*fields,now()))
+   c.commit()
+   return send(self,200,{'ok':True})
   if p=='/api/location':
    lat=as_float(d.get('lat')); lon=as_float(d.get('lon'))
    if lat is None or lon is None: return send(self,400,{'error':'coordinates_required','message':'مقدار lat و lon باید عدد باشد.'})
@@ -1148,12 +1275,19 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/admin/ai-config':
    allowed=['provider','base_url','model','stt_provider','tts_provider','system_prompt','guardrails','voice_id','tone','temperature']
    current=c.execute('SELECT * FROM ai_config WHERE id=1').fetchone(); values={k:d.get(k,current[k] if current else '') for k in allowed}
-   c.execute('UPDATE ai_config SET provider=?,base_url=?,model=?,stt_provider=?,tts_provider=?,system_prompt=?,guardrails=?,voice_id=?,tone=?,temperature=?,updated_at=? WHERE id=1',(values['provider'],values['base_url'],values['model'],values['stt_provider'],values['tts_provider'],values['system_prompt'],values['guardrails'],values['voice_id'],values['tone'],float(values['temperature']),now()))
-   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'ai_config_updated',json.dumps({'provider':values['provider'],'model':values['model'],'tone':values['tone']},ensure_ascii=False),now())); c.commit(); return send(self,200,{'ok':True})
+   c.execute('UPDATE ai_config SET provider=?,base_url=?,model=?,stt_provider=?,tts_provider=?,system_prompt=?,guardrails=?,voice_id=?,tone=?,temperature=?,updated_at=? WHERE id=1',
+     (values['provider'],values['base_url'],values['model'],values['stt_provider'],values['tts_provider'],values['system_prompt'],values['guardrails'],values['voice_id'],values['tone'],float(values['temperature']),now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',
+     (str(uuid.uuid4()),'ai_config_updated',json.dumps({'provider':values['provider'],'model':values['model'],'tone':values['tone']},ensure_ascii=False),now()))
+   c.commit()
+   return send(self,200,{'ok':True})
   if p=='/api/admin/ai-test':
    return send(self,200,{'ok':True,'provider':'configured','message':'تنظیمات API معتبر است؛ اتصال واقعی پس از ثبت کلید در محیط امن انجام می‌شود.'})
   if p=='/api/profile':
-   c.execute('INSERT INTO profile(id,name,age,needs,assistant_name,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,age=excluded.age,needs=excluded.needs,assistant_name=excluded.assistant_name,updated_at=excluded.updated_at',(d.get('name',''),d.get('age'),d.get('needs',''),d.get('assistant_name','سپندیار'),now())); c.commit(); return send(self,200,{'ok':True})
+   c.execute('INSERT INTO profile(id,name,age,needs,assistant_name,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,age=excluded.age,needs=excluded.needs,assistant_name=excluded.assistant_name,updated_at=excluded.updated_at',
+     (d.get('name',''),d.get('age'),d.get('needs',''),d.get('assistant_name','سپندیار'),now()))
+   c.commit()
+   return send(self,200,{'ok':True})
   if p=='/api/caregivers':
    _ph=str(d.get('phone','')).strip()
    # شماره هم شناسهٔ مراقب است هم عامل ورود؛ مراقب بی‌شماره هرگز نمی‌تواند وارد شود
@@ -1162,28 +1296,54 @@ class Handler(SimpleHTTPRequestHandler):
    if c.execute('SELECT id FROM caregivers WHERE phone=?',(_ph,)).fetchone():
     return send(self,409,{'error':'caregiver_exists','message':'این شماره پیش‌تر به عنوان مراقب ثبت شده است.'})
    cid=str(uuid.uuid4()); code=new_invite_code()
-   c.execute('INSERT INTO caregivers(id,name,phone,role,permissions,created_at,invite_code,failed_attempts,locked_until) VALUES(?,?,?,?,?,?,?,?,NULL)',(cid,d.get('name',''),d.get('phone',''),d.get('role','family'),json.dumps(d.get('permissions',[]),ensure_ascii=False),now(),code,0)); c.commit()
+   c.execute('INSERT INTO caregivers(id,name,phone,role,permissions,created_at,invite_code,failed_attempts,locked_until) VALUES(?,?,?,?,?,?,?,?,NULL)',
+     (cid,d.get('name',''),d.get('phone',''),d.get('role','family'),json.dumps(d.get('permissions',[]),ensure_ascii=False),now(),code,0))
+   c.commit()
    c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_invited',json.dumps({'name':d.get('name','')},ensure_ascii=False),now())); c.commit()
    # کد دعوت فقط یک بار، در پاسخ ساخت، برگردانده می‌شود
    return send(self,201,{'id':cid,'ok':True,'invite_code':code,'message':'این کد را به مراقب بدهید؛ فقط یک بار نشان داده می‌شود.'})
   if p=='/api/medications':
-   mid=str(uuid.uuid4()); c.execute('INSERT INTO medications VALUES(?,?,?,?,?)',(mid,d.get('name',''),d.get('time',''),d.get('instructions',''),'pending')); c.commit(); return send(self,201,{'id':mid,'ok':True})
+   mid=str(uuid.uuid4())
+   c.execute('INSERT INTO medications VALUES(?,?,?,?,?)',(mid,d.get('name',''),d.get('time',''),d.get('instructions',''),'pending'))
+   c.commit()
+   return send(self,201,{'id':mid,'ok':True})
   if p.startswith('/api/medications/') and p.endswith('/details'):
    rem=as_float(d.get('remaining',0)); thr=as_float(d.get('refill_threshold',5))
    if rem is None or thr is None: return send(self,400,{'error':'invalid_medication_quantity','message':'remaining و refill_threshold باید عدد باشند.'})
-   mid=p.split('/')[3]; c.execute('INSERT INTO medication_details(medication_id,purpose,remaining,refill_threshold,unit,warnings,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(medication_id) DO UPDATE SET purpose=excluded.purpose,remaining=excluded.remaining,refill_threshold=excluded.refill_threshold,unit=excluded.unit,warnings=excluded.warnings,updated_at=excluded.updated_at',(mid,d.get('purpose',''),rem,thr,d.get('unit','عدد'),d.get('warnings',''),now())); c.commit(); return send(self,200,{'ok':True})
+   mid=p.split('/')[3]
+   c.execute('INSERT INTO medication_details(medication_id,purpose,remaining,refill_threshold,unit,warnings,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(medication_id) DO UPDATE SET purpose=excluded.purpose,remaining=excluded.remaining,refill_threshold=excluded.refill_threshold,unit=excluded.unit,warnings=excluded.warnings,updated_at=excluded.updated_at',
+     (mid,d.get('purpose',''),rem,thr,d.get('unit','عدد'),d.get('warnings',''),now()))
+   c.commit()
+   return send(self,200,{'ok':True})
   if p.startswith('/api/medications/') and p.endswith('/refill'):
    amount=as_float(d.get('amount',0))
    if amount is None: return send(self,400,{'error':'invalid_amount','message':'amount باید عدد باشد.'})
    mid=p.split('/')[3]; c.execute('UPDATE medication_details SET remaining=remaining+?,updated_at=? WHERE medication_id=?',(amount,now(),mid)); c.commit(); return send(self,200,{'ok':True})
   if p.startswith('/api/medications/') and p.endswith('/event'):
-   mid=p.split('/')[3]; status=d.get('event','pending'); today=local_now().date().isoformat(); c.execute('UPDATE medications SET status=? WHERE id=?',(status,mid)); c.execute('INSERT OR REPLACE INTO medication_logs(id,medication_id,log_date,event,created_at) VALUES(?,?,?,?,?)',(str(uuid.uuid4()),mid,today,status,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'medication_'+status,json.dumps({'medication_id':mid,'log_date':today},ensure_ascii=False),now())); c.commit(); return send(self,200,{'ok':True,'status':status,'log_date':today})
+   mid=p.split('/')[3]
+   status=d.get('event','pending')
+   today=local_now().date().isoformat()
+   c.execute('UPDATE medications SET status=? WHERE id=?',(status,mid))
+   c.execute('INSERT OR REPLACE INTO medication_logs(id,medication_id,log_date,event,created_at) VALUES(?,?,?,?,?)',(str(uuid.uuid4()),mid,today,status,now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'medication_'+status,json.dumps({'medication_id':mid,'log_date':today},ensure_ascii=False),now()))
+   c.commit()
+   return send(self,200,{'ok':True,'status':status,'log_date':today})
   if p=='/api/vitals/share/revoke':
-   token=d.get('token',''); c.execute('UPDATE shares SET revoked=1 WHERE token=?',(token,)); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vitals_share_revoked',json.dumps({'token':token},ensure_ascii=False),now())); c.commit(); return send(self,200,{'ok':True})
+   token=d.get('token','')
+   c.execute('UPDATE shares SET revoked=1 WHERE token=?',(token,))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vitals_share_revoked',json.dumps({'token':token},ensure_ascii=False),now()))
+   c.commit()
+   return send(self,200,{'ok':True})
   if p=='/api/vitals/share':
    edays=as_int(d.get('expires_days',7))
    if edays is None: return send(self,400,{'error':'invalid_expires_days','message':'expires_days باید عدد باشد.'})
-   days=max(1,min(edays,30)); token=uuid.uuid4().hex; expires=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=days)).isoformat(); c.execute('INSERT INTO shares VALUES(?,?,?,?,?)',(token,d.get('scope','vitals'),expires,0,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vitals_share_created',json.dumps({'expires_at':expires},ensure_ascii=False),now())); c.commit(); return send(self,201,{'token':token,'url':f'/share/{token}','expires_at':expires})
+   days=max(1,min(edays,30))
+   token=uuid.uuid4().hex
+   expires=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=days)).isoformat()
+   c.execute('INSERT INTO shares VALUES(?,?,?,?,?)',(token,d.get('scope','vitals'),expires,0,now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vitals_share_created',json.dumps({'expires_at':expires},ensure_ascii=False),now()))
+   c.commit()
+   return send(self,201,{'token':token,'url':f'/share/{token}','expires_at':expires})
   if p=='/api/vitals/thresholds':
    items_in=d.get('items',[])
    if not isinstance(items_in,list): return send(self,400,{'error':'invalid_thresholds','message':'items باید فهرست باشد.'})
@@ -1203,16 +1363,27 @@ class Handler(SimpleHTTPRequestHandler):
      return send(self,400,{'error':'inverted_threshold','message':'حد پایین آستانهٔ '+t+' نمی‌تواند از حد بالا بزرگ‌تر باشد.'})
     parsed.append((t,nums))
    for t,(nmin,nmax,cmin,cmax) in parsed:
-    c.execute('INSERT INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(type) DO UPDATE SET normal_min=excluded.normal_min,normal_max=excluded.normal_max,critical_min=excluded.critical_min,critical_max=excluded.critical_max,updated_by=excluded.updated_by,updated_at=excluded.updated_at',(t,str(nmin),str(nmax),str(cmin),str(cmax),d.get('updated_by','caregiver'),now()))
+    c.execute('INSERT INTO vital_thresholds(type,normal_min,normal_max,critical_min,critical_max,updated_by,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(type) DO UPDATE SET normal_min=excluded.normal_min,normal_max=excluded.normal_max,critical_min=excluded.critical_min,critical_max=excluded.critical_max,updated_by=excluded.updated_by,updated_at=excluded.updated_at',
+      (t,str(nmin),str(nmax),str(cmin),str(cmax),d.get('updated_by','caregiver'),now()))
    c.commit(); return send(self,200,{'ok':True,'items':rows(c,'SELECT * FROM vital_thresholds ORDER BY type')})
   if p=='/api/vitals':
    kind=d.get('type','unknown'); value=d.get('value'); evaluation=evaluate_vital(c,kind,value)
    if kind not in ('blood_pressure','glucose','weight','heart_rate') or not evaluation['results']: return send(self,400,{'error':'invalid_vital','message':'مقدار علائم حیاتی معتبر نیست'})
-   vid=str(uuid.uuid4()); c.execute('INSERT INTO vitals VALUES(?,?,?,?,?,?)',(vid,kind,json.dumps(value,ensure_ascii=False),d.get('source','manual'),d.get('measured_at',now()),now())); c.commit(); return send(self,201,{'id':vid,'ok':True,'evaluation':evaluation})
+   vid=str(uuid.uuid4())
+   c.execute('INSERT INTO vitals VALUES(?,?,?,?,?,?)',(vid,kind,json.dumps(value,ensure_ascii=False),d.get('source','manual'),d.get('measured_at',now()),now()))
+   c.commit()
+   return send(self,201,{'id':vid,'ok':True,'evaluation':evaluation})
   if p.startswith('/api/alerts/') and p.endswith('/ack'):
-   aid=p.split('/')[3]; c.execute("UPDATE alerts SET status='acknowledged' WHERE id=?",(aid,)); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'alert_acknowledged',json.dumps({'alert_id':aid},ensure_ascii=False),now())); c.commit(); return send(self,200,{'ok':True})
+   aid=p.split('/')[3]
+   c.execute("UPDATE alerts SET status='acknowledged' WHERE id=?",(aid,))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'alert_acknowledged',json.dumps({'alert_id':aid},ensure_ascii=False),now()))
+   c.commit()
+   return send(self,200,{'ok':True})
   if p=='/api/alerts':
-   aid=str(uuid.uuid4()); c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(aid,d.get('type','general'),d.get('message',''),d.get('severity','normal'),'open',now())); c.commit(); return send(self,201,{'id':aid,'ok':True})
+   aid=str(uuid.uuid4())
+   c.execute('INSERT INTO alerts VALUES(?,?,?,?,?,?)',(aid,d.get('type','general'),d.get('message',''),d.get('severity','normal'),'open',now()))
+   c.commit()
+   return send(self,201,{'id':aid,'ok':True})
   if p=='/api/wallet/topups':
    amount=as_int(d.get('amount',0)); key=idem_key(self,d,'topup')
    if amount is None: return send(self,400,{'error':'invalid_amount','message':'مبلغ باید عدد باشد.'})
@@ -1244,16 +1415,24 @@ class Handler(SimpleHTTPRequestHandler):
     c.commit(); return send(self,200,{'status':'succeeded','transaction_id':tid,'balance':w-amount})
    return send(self,200,{'status':'succeeded','transaction_id':wid,'balance':c.execute('SELECT balance FROM wallet WHERE id=1').fetchone()['balance'],'replayed':True})
   if p=='/api/events':
-   eid=str(uuid.uuid4()); c.execute('INSERT INTO events VALUES(?,?,?,?)',(eid,d.get('type','unknown'),json.dumps(d.get('payload',{}),ensure_ascii=False),now())); c.commit(); return send(self,201,{'ok':True,'id':eid})
+   eid=str(uuid.uuid4())
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(eid,d.get('type','unknown'),json.dumps(d.get('payload',{}),ensure_ascii=False),now()))
+   c.commit()
+   return send(self,201,{'ok':True,'id':eid})
   if p=='/api/education':
    eid=str(uuid.uuid4()); topic=str(d.get('topic','')).strip(); bodytext=str(d.get('body','')).strip()
    if not topic or not bodytext: return send(self,400,{'error':'topic_and_body_required'})
-   c.execute('INSERT INTO education_content VALUES(?,?,?,?,?,?,?,?)',(eid,topic,str(d.get('category','عمومی')),bodytext,'pending','',None,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'education_submitted',json.dumps({'id':eid,'topic':topic},ensure_ascii=False),now())); c.commit(); return send(self,201,{'id':eid,'status':'pending'})
+   c.execute('INSERT INTO education_content VALUES(?,?,?,?,?,?,?,?)',(eid,topic,str(d.get('category','عمومی')),bodytext,'pending','',None,now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'education_submitted',json.dumps({'id':eid,'topic':topic},ensure_ascii=False),now()))
+   c.commit()
+   return send(self,201,{'id':eid,'status':'pending'})
   if p.startswith('/api/education/') and p.endswith('/approve'):
    eid=p.split('/')[3]; approved_by=str(d.get('approved_by','')).strip()
    if not approved_by: return send(self,400,{'error':'approved_by_required'})
    if not c.execute('SELECT id FROM education_content WHERE id=?',(eid,)).fetchone(): return send(self,404,{'error':'content_not_found'})
-   c.execute("UPDATE education_content SET status='approved',approved_by=?,approved_at=?,updated_at=? WHERE id=?",(approved_by,now(),now(),eid)); c.commit(); return send(self,200,{'id':eid,'status':'approved'})
+   c.execute("UPDATE education_content SET status='approved',approved_by=?,approved_at=?,updated_at=? WHERE id=?",(approved_by,now(),now(),eid))
+   c.commit()
+   return send(self,200,{'id':eid,'status':'approved'})
   if p=='/api/symptoms':
    sym=str(d.get('symptom','')).strip(); sev=str(d.get('severity','متوسط')).strip()
    if not sym: return send(self,400,{'error':'symptom_required'})
@@ -1262,7 +1441,8 @@ class Handler(SimpleHTTPRequestHandler):
    sid=str(uuid.uuid4()); c.execute('INSERT INTO symptom_reports VALUES(?,?,?,?,?,?,?)',(sid,sym,sev,str(d.get('note','')),str(d.get('source','self_report')),escalate,now()))
    resp={'id':sid,'ok':True,'escalated':bool(escalate)}
    if escalate:
-    aid=open_alert(c,'symptom_escalation','گزارش خوداظهاری نیازمند بررسی: '+sym+' ('+sev+')','high'); act=enqueue_caregiver_action(c,'symptom_alert',{'symptom':sym,'severity':sev,'note':str(d.get('note','')),'report_id':sid})
+    aid=open_alert(c,'symptom_escalation','گزارش خوداظهاری نیازمند بررسی: '+sym+' ('+sev+')','high')
+    act=enqueue_caregiver_action(c,'symptom_alert',{'symptom':sym,'severity':sev,'note':str(d.get('note','')),'report_id':sid})
     resp.update({'alert_id':aid,'action_id':act,'reply':'این علامت را ثبت کردم و فوراً به مراقب شما اطلاع دادم. لطفاً منتظر تماس او باشید.'})
    else: resp['reply']='علامت «'+sym+'» را ثبت کردم و در گزارش مراقب شما قرار دادم.'
    c.commit(); return send(self,201,resp)
@@ -1301,8 +1481,11 @@ class Handler(SimpleHTTPRequestHandler):
    patience=int(round(DEFAULT_PATIENCE_MS*(1.0+(0.55-avg)) )) if avg<0.55 else DEFAULT_PATIENCE_MS
    patience=max(900,min(patience,4000))
    floor=0.40 if avg<0.5 else (0.50 if avg<0.7 else 0.60)
-   c.execute('INSERT OR REPLACE INTO voice_profiles VALUES(?,?,?,?,?,?,?,?)',(pid,str(d.get('name') or 'کاربر'),str(d.get('dialect') or (c.execute('SELECT dialect FROM voice_profiles WHERE id=?',(pid,)).fetchone() or {'dialect':'standard'})['dialect']),str(d.get('secondary_dialect') or ''),patience,floor,1,now()))
-   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'voice_calibration',json.dumps({'samples':len(confs),'avg':round(avg,3),'worst':round(worst,3),'patience_ms':patience,'confidence_floor':floor},ensure_ascii=False),now())); c.commit()
+   c.execute('INSERT OR REPLACE INTO voice_profiles VALUES(?,?,?,?,?,?,?,?)',
+     (pid,str(d.get('name') or 'کاربر'),str(d.get('dialect') or (c.execute('SELECT dialect FROM voice_profiles WHERE id=?',(pid,)).fetchone() or {'dialect':'standard'})['dialect']),str(d.get('secondary_dialect') or ''),patience,floor,1,now()))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',
+     (str(uuid.uuid4()),'voice_calibration',json.dumps({'samples':len(confs),'avg':round(avg,3),'worst':round(worst,3),'patience_ms':patience,'confidence_floor':floor},ensure_ascii=False),now()))
+   c.commit()
    return send(self,200,{'ok':True,'samples':len(confs),'avg_confidence':round(avg,3),'worst_confidence':round(worst,3),'patience_ms':patience,'confidence_floor':floor,'advice':'آرام و شمرده بخوانید؛ دستگاه وسط جمله شما را قطع نمی‌کند.'})
   if p=='/api/disambiguate':
    text=str(d.get('text','')); conf=d.get('confidence')
@@ -1376,7 +1559,9 @@ class Handler(SimpleHTTPRequestHandler):
    if not consent_granted(c,'health'): return send(self,403,{'error':'senior_consent_not_granted','message':'سالمند هنوز رضایت خود را برای اشتراک‌گذاری اطلاعات سلامت ثبت نکرده است.'})
    c.execute('UPDATE caregivers SET failed_attempts=0,locked_until=NULL WHERE id=?',(cg['id'],))
    tok=secrets.token_urlsafe(32); exp=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=7)).isoformat()
-   c.execute('INSERT INTO caregiver_sessions VALUES(?,?,?,?)',(tok,phone,now(),exp)); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_session_opened',json.dumps({'phone':phone},ensure_ascii=False),now())); c.commit()
+   c.execute('INSERT INTO caregiver_sessions VALUES(?,?,?,?)',(tok,phone,now(),exp))
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_session_opened',json.dumps({'phone':phone},ensure_ascii=False),now()))
+   c.commit()
    return send(self,201,{'token':tok,'expires_at':exp,'caregiver':{'name':cg['name'],'role':cg['role']}})
   if p=='/api/caregiver/session/revoke':
    s=caregiver_session(c,self.headers)
@@ -1385,7 +1570,9 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/caregiver/call-request':
    cg=primary_caregiver(c)
    if not cg: return send(self,409,{'error':'no_caregiver','message':'هنوز مراقبی ثبت نشده است.'})
-   aid=enqueue_caregiver_action(c,'call_request',{'phone':cg['phone'],'caregiver':cg['name'],'reason':str(d.get('reason','درخواست تماس سالمند'))}); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'call_requested',json.dumps({'caregiver':cg['name']},ensure_ascii=False),now())); c.commit()
+   aid=enqueue_caregiver_action(c,'call_request',{'phone':cg['phone'],'caregiver':cg['name'],'reason':str(d.get('reason','درخواست تماس سالمند'))})
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'call_requested',json.dumps({'caregiver':cg['name']},ensure_ascii=False),now()))
+   c.commit()
    return send(self,201,{'id':aid,'ok':True,'status':'pending','caregiver':cg['name'],'phone':cg['phone'],'reply':'درخواست تماس را برای '+cg['name']+' فرستادم.'})
   if p.startswith('/api/caregiver/actions/') and p.endswith('/deliver'):
    # بی‌گارد بودن این مسیر فقط حریم خصوصی نیست، «ایمنی» است: مهاجم می‌توانست
@@ -1399,19 +1586,30 @@ class Handler(SimpleHTTPRequestHandler):
     try: mid=json.loads(row['payload'] or '{}').get('message_id')
     except Exception: mid=None
     if mid: c.execute("UPDATE messages SET status='delivered' WHERE id=? AND status='queued'",(mid,))
-   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_action_delivered',json.dumps({'id':aid,'kind':row['kind']},ensure_ascii=False),now())); c.commit(); return send(self,200,{'id':aid,'status':'delivered'})
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'caregiver_action_delivered',json.dumps({'id':aid,'kind':row['kind']},ensure_ascii=False),now()))
+   c.commit()
+   return send(self,200,{'id':aid,'status':'delivered'})
   if p=='/api/ai/chat':
    text=str(d.get('text','')); risk=assess_risk(c,text)
    if risk['level']!='normal':
     extra={}
     if risk['action']=='emergency':
      cg=primary_caregiver(c) or {}
-     extra={'alert_id':open_alert(c,'clinical_risk','گفت‌وگوی نیازمند بررسی فوری: '+str(risk['matched']),'critical'),'action_id':enqueue_caregiver_action(c,'call_request',{'phone':cg.get('phone',''),'caregiver':cg.get('name',''),'reason':'گزارش پرخطر در گفت‌وگو: '+str(risk['matched'])}),'matched':risk['matched']}
+     extra={'alert_id':open_alert(c,'clinical_risk','گفت‌وگوی نیازمند بررسی فوری: '+str(risk['matched']),'critical'),
+       'action_id':enqueue_caregiver_action(c,'call_request',{'phone':cg.get('phone',''),'caregiver':cg.get('name',''),'reason':'گزارش پرخطر در گفت‌وگو: '+str(risk['matched'])}),
+       'matched':risk['matched']}
     else: extra={'action_id':enqueue_caregiver_action(c,'professional_referral',{'text':text[:300],'matched':risk['matched']}),'matched':risk['matched']}
     c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'safety_intercept',json.dumps({'level':risk['level'],'matched':risk['matched']},ensure_ascii=False),now())); c.commit()
     remember(c,str(d.get('profile') or 'default'),'user',text,'safety_intercept',1)
     remember(c,str(d.get('profile') or 'default'),'assistant',risk['reply'],'safety_intercept',1); c.commit()
-    out={'ok':True,'text':risk['reply'],'provider':'safety_guardrail','safety':'urgent' if risk['level']=='critical' else 'caution','clinical_answer_blocked':True,'requires_escalation':risk['action']=='emergency'}; out.update(extra); return send(self,200,out)
+    out={'ok':True,
+      'text':risk['reply'],
+      'provider':'safety_guardrail',
+      'safety':'urgent' if risk['level']=='critical' else 'caution',
+      'clinical_answer_blocked':True,
+      'requires_escalation':risk['action']=='emergency'}
+    out.update(extra)
+    return send(self,200,out)
    pid=str(d.get('profile') or 'default')
    remember(c,pid,'user',text,'chat')
    answer=call_llm(c,text,d.get('context'),pid)
@@ -1424,10 +1622,17 @@ class Handler(SimpleHTTPRequestHandler):
     extra={}
     if risk['action']=='emergency':
      cg=primary_caregiver(c) or {}
-     extra={'alert_id':open_alert(c,'clinical_risk','گفت‌وگوی نیازمند بررسی فوری: '+str(risk['matched']),'critical'),'action_id':enqueue_caregiver_action(c,'call_request',{'phone':cg.get('phone',''),'caregiver':cg.get('name',''),'reason':'گزارش پرخطر در گفت‌وگو: '+str(risk['matched'])})}
+     extra={'alert_id':open_alert(c,'clinical_risk','گفت‌وگوی نیازمند بررسی فوری: '+str(risk['matched']),'critical'),
+       'action_id':enqueue_caregiver_action(c,'call_request',{'phone':cg.get('phone',''),'caregiver':cg.get('name',''),'reason':'گزارش پرخطر در گفت‌وگو: '+str(risk['matched'])})}
     else: extra={'action_id':enqueue_caregiver_action(c,'professional_referral',{'text':str(d.get('text',''))[:300],'matched':risk['matched']})}
     c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'safety_intercept',json.dumps({'level':risk['level'],'matched':risk['matched']},ensure_ascii=False),now())); c.commit()
-    out={'intent':'safety.emergency' if risk['action']=='emergency' else 'safety.referral','spoken_reply':risk['reply'],'requires_confirmation':True,'safety':'urgent' if risk['level']=='critical' else 'caution','clinical_answer_blocked':True}; out.update(extra); return send(self,200,out)
+    out={'intent':'safety.emergency' if risk['action']=='emergency' else 'safety.referral',
+      'spoken_reply':risk['reply'],
+      'requires_confirmation':True,
+      'safety':'urgent' if risk['level']=='critical' else 'caution',
+      'clinical_answer_blocked':True}
+    out.update(extra)
+    return send(self,200,out)
    raw=str(d.get('text','')); pid=str(d.get('profile') or 'default'); prof=get_voice_profile(c,pid)
    alias,ascore=find_alias(c,raw,pid)
    text,rules=normalize_dialect(c,raw,prof['dialect'],prof['secondary_dialect'])
