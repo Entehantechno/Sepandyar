@@ -44,7 +44,14 @@ main_kt=open(os.path.join(ROOT,'android/app/src/main/java/ai/arena/sepandyar/Mai
 gradle=open(os.path.join(ROOT,'android/app/build.gradle.kts'),encoding='utf-8').read()
 html=open(os.path.join(ROOT,'index.html'),encoding='utf-8').read()
 sw=open(os.path.join(ROOT,'sw.js'),encoding='utf-8').read()
-srvsrc=open(os.path.join(ROOT,'server.py'),encoding='utf-8').read()
+# «srvsrc» متن کل کد سمت سرور است، نه فقط server.py. پس از ماژولار شدن،
+# server.py تنها نقطهٔ ورود است و کد در app/ زندگی می‌کند؛ اگر فقط همان را
+# می‌خواندیم، سنجش‌های ساختاری (مثلاً «datetime.now() خام نمانده») روی یک فایل
+# ۵۸ خطی «بی‌معنا» سبز می‌شدند — که از شکست خوردن هم بدتر است.
+_srvfiles=[os.path.join(ROOT,'server.py')]+sorted(
+    os.path.join(ROOT,'app',_f) for _f in os.listdir(os.path.join(ROOT,'app'))
+    if _f.endswith('.py'))
+srvsrc='\n'.join(open(_p,encoding='utf-8').read() for _p in _srvfiles)
 
 print('--- 1) مجوزهای شبکه در مانیفست ---')
 check('مجوز INTERNET اعلام شده','android.permission.INTERNET' in manifest,'')
@@ -1118,7 +1125,9 @@ _c.commit(); _c.close()
 # آزمون رفتاری race ذاتاً احتمالی است — در باگ‌یابی دور دهم یک بار روی
 # کد باگ‌دار هم قبول شد. پس الگوی تصاحب اتمیک را قطعی هم می‌سنجیم تا
 # رگرسیون بی‌صدا رد نشود.
-_srv17=open(os.path.join(ROOT,'server.py'),encoding='utf-8').read()
+# «_srv17» هم باید کل بسته را ببیند: این الگوها (تصاحب اتمیک با INSERT
+# شرطی) از server.py به app/proactive.py و app/caregiver.py منتقل شده‌اند.
+_srv17=srvsrc
 check('الگو: هشدار با INSERT شرطی اتمیک ساخته می‌شود',
       'INSERT INTO alerts(id,type,message,severity,status,created_at) SELECT' in _srv17
       and 'WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE type=?' in _srv17)
@@ -1177,7 +1186,7 @@ for _path,_label in [('/index.html','صفحهٔ سالمند'),('/caregiver.html
                         else (isinstance(_b,dict) and len(_b)>0))
     check('کارکرد: '+_label+' سرو می‌شود',_ok,(_st,list(_b)[:4] if isinstance(_b,dict) else _b))
 check('allowlist روی مسیر decode‌شده سنجیده می‌شود',
-      'unquote(p,errors=' in open(os.path.join(ROOT,'server.py'),encoding='utf-8').read())
+      'unquote(p,errors=' in srvsrc)
 
 # ── بخش ۱۹: دور یازدهم باگ‌یابی — HEAD، کلید تکرارناپذیری، سقف بدنه، تایم‌اوت ──
 # هر چهار باگ روی سرور در حال اجرا اندازه‌گیری و سپس رفع شد. برای هر کدام هم
