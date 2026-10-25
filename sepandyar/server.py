@@ -6,6 +6,22 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, quote, unquote, parse_qs
 ROOT=os.path.dirname(__file__); DB=os.path.join(ROOT,'sepandyar.db')
 def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat()
+# «الان» به ساعت دیواری کاربر. پیش از این چهار محل منطق روزانه از
+# datetime.now() خام استفاده می‌کردند، یعنی ساعتِ «خودِ سرور». روی هر سروری که
+# منطقهٔ زمانی‌اش تهران نیست، یادآوری دارو به همان اختلاف جابه‌جا می‌شد: روی
+# سرور UTC، پنجرهٔ سکوت ۲۲:۰۰–۰۷:۰۰ به ۰۱:۳۰–۱۰:۳۰ ایران ترجمه می‌شد — یعنی
+# یادآوری صبحگاهی سرکوب می‌شد و سالمند نصفه‌شب بیدار می‌شد. تاریخ «امروز» هم بین
+# ۰۰:۰۰ و ۰۳:۳۰ ایران، روز قبل محسوب می‌شد و دوز به روز اشتباه ثبت می‌گشت.
+# زمانِ خودِ دارو از قبل درست ذخیره می‌شود (HH:MM دیواری = نیت کاربر)؛ تنها
+# خطا در مقایسه بود، پس فقط ساعت مرجع اصلاح می‌شود.
+def _tehran_tz():
+ # ZoneInfo درست‌ترین راه است. اما اگر پایگاه‌دادهٔ tz موجود نباشد (مثلاً
+ # ویندوز بدون بستهٔ tzdata) نباید کل یادآور از کار بیفتد. ایران از ۲۱ سپتامبر
+ # ۲۰۲۲ ساعت تابستانی را لغو کرده و UTC+3:30 ثابت است، پس این جایگزین دقیق است.
+ try: return ZoneInfo('Asia/Tehran')
+ except Exception: return datetime.timezone(datetime.timedelta(hours=3,minutes=30))
+LOCAL_TZ=_tehran_tz()
+def local_now(): return datetime.datetime.now(LOCAL_TZ)
 def db(h=None):
  # اتصال روی هندلر ثبت می‌شود تا در پایان درخواست بسته شود؛
  # وگرنه خطای وسط تراکنش، قفل نوشتن را رها می‌کند و کل پایگاه‌داده قفل می‌شود
@@ -305,7 +321,7 @@ PROACTIVE_PROMPTS=[('morning_checkin','09:00','صبح بخیر. حال روحی 
 PROACTIVE_ESCALATE_MIN=45   # دقیقه بی‌پاسخی پیش از خبر دادن مراقب
 def collect_due_prompts(c,at_local=None):
  """یادآورهای پیش‌دستانه‌ای که الان سررسیدشان است. هم endpoint و هم زمان‌بند صدایش می‌زنند."""
- tz=ZoneInfo('Asia/Tehran'); nl=at_local or datetime.datetime.now(tz)
+ nl=at_local or local_now()
  hhmm=nl.strftime('%H:%M'); day=nl.date().isoformat(); out=[]
  for kind,at,text in PROACTIVE_PROMPTS:
   delta=abs((datetime.datetime.strptime(hhmm,'%H:%M')-datetime.datetime.strptime(at,'%H:%M')).total_seconds())
@@ -820,7 +836,7 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/proactive/due':
    return send(self,200,{'items':collect_due_prompts(c),'escalated':escalate_stale_prompts(c),'checked_at':now()})
   if p=='/api/reminders/due':
-   current=datetime.datetime.now().strftime('%H:%M'); today=datetime.datetime.now().date().isoformat(); due=[]; settings=c.execute('SELECT * FROM reminder_settings WHERE id=1').fetchone(); quiet=in_quiet_window(current,settings['quiet_start'],settings['quiet_end']) if settings else False
+   current=local_now().strftime('%H:%M'); today=local_now().date().isoformat(); due=[]; settings=c.execute('SELECT * FROM reminder_settings WHERE id=1').fetchone(); quiet=in_quiet_window(current,settings['quiet_start'],settings['quiet_end']) if settings else False
    if not quiet:
     for m in c.execute("SELECT * FROM medications WHERE id NOT IN (SELECT medication_id FROM medication_logs WHERE log_date=? AND event='taken')",(today,)).fetchall():
      try:
@@ -843,7 +859,7 @@ class Handler(SimpleHTTPRequestHandler):
     c.commit()
    return send(self,200,{'items':due,'checked_at':now(),'quiet_hours':quiet})
   if p=='/api/care-circle/summary':
-   prof=c.execute('SELECT name,age,needs FROM profile WHERE id=1').fetchone(); today=datetime.datetime.now().date().isoformat(); meds=rows(c,"SELECT m.id,m.name,m.time,COALESCE(l.event,'pending') AS status FROM medications m LEFT JOIN medication_logs l ON l.medication_id=m.id AND l.log_date=? ORDER BY m.time",(today,)); alerts=rows(c,"SELECT id,type,message,severity,status,created_at FROM alerts WHERE status='open' ORDER BY created_at DESC LIMIT 20"); vit=c.execute("SELECT type,value,measured_at FROM vitals ORDER BY measured_at DESC LIMIT 1").fetchone(); return send(self,200,{'profile':dict(prof) if prof else {},'medications':meds,'open_alerts':alerts,'last_vital':dict(vit) if vit else None,'caregivers':rows(c,'SELECT name,phone,role FROM caregivers'),'tasks':rows(c,"SELECT * FROM care_tasks WHERE status!='done' ORDER BY due_at"),'last_checkin':dict(c.execute('SELECT * FROM checkins ORDER BY created_at DESC LIMIT 1').fetchone()) if c.execute('SELECT COUNT(*) FROM checkins').fetchone()[0] else None})
+   prof=c.execute('SELECT name,age,needs FROM profile WHERE id=1').fetchone(); today=local_now().date().isoformat(); meds=rows(c,"SELECT m.id,m.name,m.time,COALESCE(l.event,'pending') AS status FROM medications m LEFT JOIN medication_logs l ON l.medication_id=m.id AND l.log_date=? ORDER BY m.time",(today,)); alerts=rows(c,"SELECT id,type,message,severity,status,created_at FROM alerts WHERE status='open' ORDER BY created_at DESC LIMIT 20"); vit=c.execute("SELECT type,value,measured_at FROM vitals ORDER BY measured_at DESC LIMIT 1").fetchone(); return send(self,200,{'profile':dict(prof) if prof else {},'medications':meds,'open_alerts':alerts,'last_vital':dict(vit) if vit else None,'caregivers':rows(c,'SELECT name,phone,role FROM caregivers'),'tasks':rows(c,"SELECT * FROM care_tasks WHERE status!='done' ORDER BY due_at"),'last_checkin':dict(c.execute('SELECT * FROM checkins ORDER BY created_at DESC LIMIT 1').fetchone()) if c.execute('SELECT COUNT(*) FROM checkins').fetchone()[0] else None})
   if p=='/api/care-tasks': return send(self,200,{'items':rows(c,'SELECT * FROM care_tasks ORDER BY due_at')})
   if p=='/api/checkins': return send(self,200,{'items':rows(c,'SELECT * FROM checkins ORDER BY created_at DESC LIMIT 30')})
   if p=='/api/icope': return send(self,200,{'items':rows(c,'SELECT * FROM icope_assessments ORDER BY assessed_at DESC')})
@@ -958,7 +974,7 @@ class Handler(SimpleHTTPRequestHandler):
    s=caregiver_session(c,self.headers)
    if not s: return send(self,403,{'error':'caregiver_session_required','message':'برای دیدن این صفحه، ابتدا با شماره همراه مراقب وارد شوید.'})
    if not consent_granted(c,'health'): return send(self,403,{'error':'senior_consent_not_granted','message':'سالمند هنوز رضایت خود را برای اشتراک‌گذاری اطلاعات سلامت ثبت نکرده است.'})
-   prof=c.execute('SELECT name,age,needs FROM profile WHERE id=1').fetchone(); today=datetime.datetime.now().date().isoformat()
+   prof=c.execute('SELECT name,age,needs FROM profile WHERE id=1').fetchone(); today=local_now().date().isoformat()
    meds=rows(c,"SELECT m.id,m.name,m.time,COALESCE(l.event,'pending') AS status FROM medications m LEFT JOIN medication_logs l ON l.medication_id=m.id AND l.log_date=? ORDER BY m.time",(today,))
    alerts=rows(c,"SELECT id,type,message,severity,status,created_at FROM alerts WHERE status='open' ORDER BY created_at DESC LIMIT 20")
    vit=c.execute('SELECT type,value,measured_at FROM vitals ORDER BY measured_at DESC LIMIT 1').fetchone()
@@ -1134,7 +1150,7 @@ class Handler(SimpleHTTPRequestHandler):
    if amount is None: return send(self,400,{'error':'invalid_amount','message':'amount باید عدد باشد.'})
    mid=p.split('/')[3]; c.execute('UPDATE medication_details SET remaining=remaining+?,updated_at=? WHERE medication_id=?',(amount,now(),mid)); c.commit(); return send(self,200,{'ok':True})
   if p.startswith('/api/medications/') and p.endswith('/event'):
-   mid=p.split('/')[3]; status=d.get('event','pending'); today=datetime.datetime.now().date().isoformat(); c.execute('UPDATE medications SET status=? WHERE id=?',(status,mid)); c.execute('INSERT OR REPLACE INTO medication_logs(id,medication_id,log_date,event,created_at) VALUES(?,?,?,?,?)',(str(uuid.uuid4()),mid,today,status,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'medication_'+status,json.dumps({'medication_id':mid,'log_date':today},ensure_ascii=False),now())); c.commit(); return send(self,200,{'ok':True,'status':status,'log_date':today})
+   mid=p.split('/')[3]; status=d.get('event','pending'); today=local_now().date().isoformat(); c.execute('UPDATE medications SET status=? WHERE id=?',(status,mid)); c.execute('INSERT OR REPLACE INTO medication_logs(id,medication_id,log_date,event,created_at) VALUES(?,?,?,?,?)',(str(uuid.uuid4()),mid,today,status,now())); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'medication_'+status,json.dumps({'medication_id':mid,'log_date':today},ensure_ascii=False),now())); c.commit(); return send(self,200,{'ok':True,'status':status,'log_date':today})
   if p=='/api/vitals/share/revoke':
    token=d.get('token',''); c.execute('UPDATE shares SET revoked=1 WHERE token=?',(token,)); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'vitals_share_revoked',json.dumps({'token':token},ensure_ascii=False),now())); c.commit(); return send(self,200,{'ok':True})
   if p=='/api/vitals/share':

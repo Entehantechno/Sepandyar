@@ -1030,7 +1030,8 @@ _c16.commit(); _c16.close()
 _c16=sqlite3.connect(_m14.DB)
 for _t in ['reminder_events','medications','medication_logs']: _c16.execute('DELETE FROM '+_t)
 _c16.commit(); _c16.close()
-_hh=datetime.datetime.now().strftime('%H:%M')
+_ln24=getattr(_m14,'local_now',None)
+_hh=(_ln24() if _ln24 else datetime.datetime.now()).strftime('%H:%M')   # ساعت ایران؛ پیش‌تر now() خام بود و تست به باگ کوپل شده بود
 req(B14,'/api/medications','POST',{'name':'داروی آزمون ۱۶','time':_hh,'instructions':'x'})
 for _n,_want in [(0,0),(2,1)]:
     req(B14,'/api/reminder-settings','POST',{'quiet_start':'00:00','quiet_end':'00:01','max_nudges':_n})
@@ -1626,6 +1627,101 @@ _c,_j=req(B23,'/api/caregiver/call-request','POST',{'reason':'کنترل مثب�
 check('بخش۲۳ درخواست تماس سالمند بدون توکن کار می‌کند', _c==201, (_c,_j))
 
 _s23.shutdown(); _s23.server_close()
+
+# ================== بخش ۲۴: منطق روزانه بر پایهٔ ساعت ایران ==================
+# چهار محل از منطق روزانه از datetime.now() خام استفاده می‌کردند، یعنی ساعتِ خودِ
+# سرور. روی هر میزبانی که منطقهٔ زمانی‌اش تهران نیست، یادآوری دارو به همان اختلاف
+# جابه‌جا می‌شد. اثبات پیش از رفع: دوزی که «همین لحظه» به وقت تهران سررسید بود،
+# روی سرور UTC سررسید گزارش نمی‌شد (۰ در برابر ۱). بدتر، پنجرهٔ سکوت ۲۲:۰۰–۰۷:۰۰
+# به ۰۱:۳۰–۱۰:۳۰ ایران ترجمه می‌شد: یادآوری صبحگاهی سرکوب و سالمند نصفه‌شب بیدار.
+print()
+print('--- بخش ۲۴: منطق روزانه بر پایهٔ ساعت ایران ---')
+
+# ۱) نگهبان ساختاری: هیچ datetime.now() خامی نباید در server.py بماند.
+import ast as _ast24
+_t24=_ast24.parse(srvsrc)
+for _n24 in _ast24.walk(_t24):   # کامنت‌ها و رشته‌ها را بی‌اثر کن تا متن توضیح، کد حساب نشود
+    if isinstance(_n24,_ast24.Constant) and isinstance(_n24.value,str): _n24.value=''
+_bare=[]
+for _n24 in _ast24.walk(_t24):
+    if isinstance(_n24,_ast24.Call) and isinstance(_n24.func,_ast24.Attribute) and _n24.func.attr=='now' \
+       and not _n24.args and not _n24.keywords:
+        _bare.append((_n24.lineno,_ast24.unparse(_n24)))
+check('بخش۲۴ هیچ datetime.now() خامی در server.py نمانده', _bare==[], _bare)
+check('بخش۲۴ local_now() تعریف شده', 'def local_now():' in srvsrc, srvsrc.find('def local_now():'))
+
+# ۲) خاصیت کلیدی: آفست باید دقیقاً +3:30 باشد. این سنجش مستقل از TZ ماشین است؛
+#    تستی که فقط «سررسید درست است» را بسنجد، روی ماشین تهران‌زمانه تصادفی سبز می‌شود.
+_ln24=getattr(_m14,'local_now',None)
+check('بخش۲۴ local_now روی ماژول سرور موجود است', _ln24 is not None, 'local_now وجود ندارد')
+_off=_ln24().utcoffset() if _ln24 else datetime.timedelta(0)
+check('بخش۲۴ آفست local_now دقیقاً ۳:۳۰+ است',
+      _off==datetime.timedelta(hours=3,minutes=30), str(_off))
+_IR=datetime.datetime.now(_m14.ZoneInfo('Asia/Tehran'))
+check('بخش۲۴ ساعت local_now با محاسبهٔ مستقل تهران یکی است',
+      bool(_ln24) and abs((_ln24()-_IR).total_seconds())<5,
+      (_ln24().isoformat() if _ln24 else None,_IR.isoformat()))
+check('بخش۲۴ تاریخ «امروز» برابر تاریخ تهران است نه تاریخ سرور',
+      bool(_ln24) and _ln24().date().isoformat()==_IR.date().isoformat(),
+      (_ln24().date().isoformat() if _ln24 else None,_IR.date().isoformat()))
+
+# ۳) اثبات رفتاری با TZ اجباری دور از تهران. اگر TZ ماشین عوض شود، نتیجه نباید عوض شود.
+import time as _t24
+_tz_saved=os.environ.get('TZ')
+try:
+    os.environ['TZ']='UTC'; _t24.tzset()
+except Exception:
+    pass
+_s24=ThreadingHTTPServer(('127.0.0.1',0),_m14.Handler)
+threading.Thread(target=_s24.serve_forever,daemon=True).start()
+B24='http://127.0.0.1:%d'%_s24.server_address[1]
+_dose=datetime.datetime.now(_m14.ZoneInfo('Asia/Tehran')).strftime('%H:%M')
+_c,_j=req(B24,'/api/medications','POST',{'name':'متفورمین تست۲۴','dose':'500mg','time':_dose,'frequency':'daily'})
+check('بخش۲۴ دارو با ساعت ایران ثبت می‌شود', _c==201, (_c,_j))
+_c,_j=req(B24,'/api/reminders/due')
+_names=[i.get('name') for i in _j.get('items',[])]
+check('بخش۲۴ دوزی که همین لحظه به وقت ایران سررسید است، گزارش می‌شود',
+      'متفورمین تست۲۴' in _names, (_c,_names,_dose))
+# کنترل منفی: بدون این، تست می‌تواند با «همیشه سررسید است» هم سبز شود.
+_c,_j=req(B24,'/api/medications','POST',{'name':'آسپرین تست۲۴','dose':'80mg','time':'05:12','frequency':'daily'})
+_c,_j=req(B24,'/api/reminders/due')
+_names=[i.get('name') for i in _j.get('items',[])]
+check('بخش۲۴ دوزی که سررسید نیست گزارش نمی‌شود', 'آسپرین تست۲۴' not in _names, _names)
+
+# ۴) پنجرهٔ سکوت باید به وقت ایران سنجیده شود — کاربرپسندترین پیامد این باگ.
+_now_ir=datetime.datetime.now(_m14.ZoneInfo('Asia/Tehran'))
+_qs=(_now_ir+datetime.timedelta(minutes=30)).strftime('%H:%M')
+_qe=(_now_ir+datetime.timedelta(minutes=90)).strftime('%H:%M')
+req(B24,'/api/reminders/settings','POST',{'quiet_start':_qs,'quiet_end':_qe,'max_nudges':2})
+_c,_j=req(B24,'/api/reminders/due')
+check('بخش۲۴ پنجرهٔ سکوت ایران یادآوری را سرکوب می‌کند',
+      'متفورمین تست۲۴' not in [i.get('name') for i in _j.get('items',[])], (_qs,_qe,_j.get('items')))
+# کنترل مثبتِ سرکوب: پنجره را از روی «الان» برداریم، یادآوری باید برگردد.
+_qs2=(_now_ir+datetime.timedelta(minutes=180)).strftime('%H:%M')
+_qe2=(_now_ir+datetime.timedelta(minutes=240)).strftime('%H:%M')
+req(B24,'/api/reminders/settings','POST',{'quiet_start':_qs2,'quiet_end':_qe2,'max_nudges':2})
+# کنترل مثبت با داروی تازه: UNIQUE(medication_id,reminder_date,channel) در reminder_events
+# فقط یک یادآوری به ازای هر دارو/روز/کانال اجازه می‌دهد، پس همان دارو دوباره شلیک نمی‌شود.
+_dose2=datetime.datetime.now(_m14.ZoneInfo('Asia/Tehran')).strftime('%H:%M')
+req(B24,'/api/medications','POST',{'name':'لوزارتان تست۲۴','dose':'50mg','time':_dose2,'frequency':'daily'})
+_c,_j=req(B24,'/api/reminders/due')
+check('بخش۲۴ با برداشتن پنجرهٔ سکوت، یادآوری برمی‌گردد',
+      'لوزارتان تست۲۴' in [i.get('name') for i in _j.get('items',[])], (_qs2,_qe2,[i.get('name') for i in _j.get('items',[])]))
+
+# ۵) مرز تاریخ: دوزی که «الان» مصرف می‌شود باید به تاریخ ایران ثبت شود.
+_med_id=[i.get('id') for i in (req(B24,'/api/medications')[1].get('items',[])) if i.get('name')=='متفورمین تست۲۴']
+if _med_id:
+    req(B24,'/api/medications/%s/event'%_med_id[0],'POST',{'event':'taken'})
+    _logs=[l for l in _m14.rows(_m14.db(),'SELECT * FROM medication_logs WHERE medication_id=?',(_med_id[0],))]
+    check('بخش۲۴ ثبت مصرف به تاریخ ایران نوشته می‌شود',
+          bool(_logs) and _logs[0]['log_date']==_IR.date().isoformat(),
+          [l['log_date'] for l in _logs]+[_IR.date().isoformat()])
+else:
+    check('بخش۲۴ ثبت مصرف به تاریخ ایران نوشته می‌شود', False, 'دارو پیدا نشد')
+if _tz_saved is None: os.environ.pop('TZ',None)
+else: os.environ['TZ']=_tz_saved
+try: _t24.tzset()
+except Exception: pass
 
 print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
