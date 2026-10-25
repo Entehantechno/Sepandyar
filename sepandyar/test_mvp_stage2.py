@@ -74,9 +74,9 @@ s,j=req('/api/caregiver/panel',headers={'X-Caregiver-Token':'bad-token'}); check
 print('--- 5) پیام و درخواست تماس برای مراقب (بند ۳ MVP) ---')
 s,j=req('/api/contacts','POST',{'name':'مراقب مرحله دو','phone':'09128888888','relationship':'family'}); cid=j.get('id')
 s,j=req('/api/messages','POST',{'contact_id':cid,'body':'حالت چطور است؟','kind':'text'}); check('پیام صف می‌شود + action_id',s==201 and j.get('status')=='queued' and j.get('action_id'),(s,j)); aid=j.get('action_id'); mid=j.get('id')
-s,j=req('/api/caregiver/actions'); pend=[a for a in j.get('items',[]) if a['status']=='pending']
+s,j=req('/api/caregiver/actions',headers=H); pend=[a for a in j.get('items',[]) if a['status']=='pending']
 check('اقدام در انتظار در صف مراقب دیده می‌شود',any(a['id']==aid for a in pend),(s,len(pend)))
-s,j=req('/api/caregiver/actions/'+str(aid)+'/deliver','POST',{'delivered_by':'مراقب مرحله دو'}); check('تحویل اقدام',s==200 and j.get('status')=='delivered',(s,j))
+s,j=req('/api/caregiver/actions/'+str(aid)+'/deliver','POST',{'delivered_by':'مراقب مرحله دو'},headers=H); check('تحویل اقدام',s==200 and j.get('status')=='delivered',(s,j))
 s,j=req('/api/messages'); row=[m for m in j.get('items',[]) if m['id']==mid]
 check('وضعیت پیام از queued به delivered رفت',bool(row) and row[0]['status']=='delivered',(s,row))
 s,j=req('/api/caregiver/call-request','POST',{'reason':'احساس تنگی نفس'}); check('درخواست تماس در صف می‌نشیند',s==201 and j.get('status')=='pending' and j.get('reply'),(s,j))

@@ -947,7 +947,13 @@ class Handler(SimpleHTTPRequestHandler):
     items.append(x)
    return send(self,200,{'items':items})
   if p=='/api/screen-tasks': return send(self,200,{'items':rows(c,'SELECT * FROM screen_task_runs ORDER BY started_at DESC LIMIT 50')})
-  if p=='/api/caregiver/actions': return send(self,200,{'items':rows(c,'SELECT * FROM caregiver_actions ORDER BY requested_at DESC LIMIT 50')})
+  if p=='/api/caregiver/actions':
+   # ستون payload این جدول شمارهٔ «کامل» مراقب و دلیل درخواست سالمند را نگه می‌دارد —
+   # همان داده‌ای که /api/caregivers برای تماس‌گیرندهٔ ناشناس ماسک می‌کند. اینجا بی‌گارد
+   # بود؛ اندازه‌گیری شد: GET ناشناس → {"phone": "09121234567", ...}.
+   # تنها caller مشروع caregiver.html است که X-Caregiver-Token می‌فرستد.
+   if not caregiver_session(c,self.headers): return send(self,403,{'error':'caregiver_session_required','message':'برای دیدن این صفحه، ابتدا با شماره همراه مراقب وارد شوید.'})
+   return send(self,200,{'items':rows(c,'SELECT * FROM caregiver_actions ORDER BY requested_at DESC LIMIT 50')})
   if p=='/api/caregiver/panel':
    s=caregiver_session(c,self.headers)
    if not s: return send(self,403,{'error':'caregiver_session_required','message':'برای دیدن این صفحه، ابتدا با شماره همراه مراقب وارد شوید.'})
@@ -1331,6 +1337,10 @@ class Handler(SimpleHTTPRequestHandler):
    aid=enqueue_caregiver_action(c,'call_request',{'phone':cg['phone'],'caregiver':cg['name'],'reason':str(d.get('reason','درخواست تماس سالمند'))}); c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'call_requested',json.dumps({'caregiver':cg['name']},ensure_ascii=False),now())); c.commit()
    return send(self,201,{'id':aid,'ok':True,'status':'pending','caregiver':cg['name'],'phone':cg['phone'],'reply':'درخواست تماس را برای '+cg['name']+' فرستادم.'})
   if p.startswith('/api/caregiver/actions/') and p.endswith('/deliver'):
+   # بی‌گارد بودن این مسیر فقط حریم خصوصی نیست، «ایمنی» است: مهاجم می‌توانست
+   # درخواست تماسِ در انتظار سالمند را delivered علامت بزند و از صف مراقب ناپدیدش
+   # کند، پس هیچ‌کس سراغ سالمند نمی‌رفت. اندازه‌گیری شد: POST ناشناس → 200 delivered.
+   if not caregiver_session(c,self.headers): return send(self,403,{'error':'caregiver_session_required','message':'برای دیدن این صفحه، ابتدا با شماره همراه مراقب وارد شوید.'})
    aid=p.split('/')[4]; row=c.execute('SELECT * FROM caregiver_actions WHERE id=?',(aid,)).fetchone()
    if not row: return send(self,404,{'error':'action_not_found'})
    c.execute("UPDATE caregiver_actions SET status='delivered',delivered_at=?,delivered_by=? WHERE id=?",(now(),str(d.get('delivered_by','caregiver')),aid))

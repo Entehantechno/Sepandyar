@@ -1549,6 +1549,84 @@ check('بخش۲۲ refill با amount=1e400 با ۴۰۰ رد می‌شود', _cod
 
 _s22.shutdown(); _s22.server_close()
 
+# ===================== بخش ۲۳: احراز هویت سطح مراقب =====================
+# دو مسیر از هشت مسیر /api/caregiver/* گارد نداشتند، در حالی که هر دو خواهرشان
+# (panel و conversation-summary) داشتند. چون payload این جدول شمارهٔ «کامل» مراقب
+# را دارد — همان داده‌ای که /api/caregivers برای ناشناس ماسک می‌کند — نشتی حریم
+# خصوصی بود. و deliver بی‌گارد از آن بدتر بود: مهاجم می‌توانست درخواست تماسِ در
+# انتظار سالمند را delivered علامت بزند تا هیچ‌کس سراغش نرود (مسئلهٔ ایمنی).
+_s23=ThreadingHTTPServer(('127.0.0.1',0),_m14.Handler)
+threading.Thread(target=_s23.serve_forever,daemon=True).start()
+B23='http://127.0.0.1:%d'%_s23.server_address[1]
+print()
+print('--- بخش ۲۳: احراز هویت سطح مراقب ---')
+
+# --- نگهبان ساختاری: هر مسیر /api/caregiver/* باید گارد داشته باشد، مگر آن‌هایی ---
+# --- که «عمداً» بازند. این قاعده مسیرهای آینده را هم می‌گیرد، نه فقط فهرست امروز. ---
+OPEN_ON_PURPOSE={'/api/caregiver/session','/api/caregiver/call-request'}
+import ast as _ast23
+_tree=_ast23.parse(srvsrc)
+_missing=[]; _seen=[]
+class _G(_ast23.NodeVisitor):
+    def visit_If(self,node):
+        t=node.test; lit=None
+        # p=='/api/...'  یا  p.startswith('/api/...')
+        if isinstance(t,_ast23.Compare) and len(t.comparators)==1 and isinstance(t.comparators[0],_ast23.Constant) \
+           and isinstance(t.comparators[0].value,str) and t.comparators[0].value.startswith('/api/caregiver/'):
+            lit=t.comparators[0].value
+        elif isinstance(t,_ast23.Call) and isinstance(t.func,_ast23.Attribute) and t.func.attr=='startswith' and t.args \
+           and isinstance(t.args[0],_ast23.Constant) and isinstance(t.args[0].value,str) \
+           and t.args[0].value.startswith('/api/caregiver/'):
+            lit=t.args[0].value
+        if lit is not None:
+            _seen.append(lit)
+            body_src=_ast23.get_source_segment(srvsrc,node) or ''
+            if 'caregiver_session(' not in body_src and lit not in OPEN_ON_PURPOSE:
+                _missing.append(lit)
+        self.generic_visit(node)
+_G().visit(_tree)
+check('بخش۲۳ نگهبان ساختاری مسیرهای caregiver را پیدا می‌کند', len(_seen)>=6, _seen)
+check('بخش۲۳ هر مسیر /api/caregiver/* گارد احراز هویت دارد (جز موارد عمدی)', _missing==[], _missing)
+for _o in sorted(OPEN_ON_PURPOSE):
+    check('بخش۲۳ %s عمداً باز است (caller آن سالمند یا خودِ ورود است)'%_o, _o in _seen, _seen)
+
+# --- اثبات رفتاری ---
+_c,_cg=req(B23,'/api/caregivers','POST',{'name':'نگهبان تست','phone':'09350001122','role':'پسر'})
+_code=_cg.get('invite_code')
+req(B23,'/api/consents','POST',{'scope':'health','granted':True})
+_a,_r=req(B23,'/api/caregiver/call-request','POST',{'reason':'حالم خوب نیست'})
+_aid=(_r or {}).get('id')
+_s,_ses=req(B23,'/api/caregiver/session','POST',{'phone':'09350001122','code':_code})
+_tok=(_ses or {}).get('token')
+check('بخش۲۳ نشست مراقب با کد دعوت باز می‌شود', _s==201 and bool(_tok), (_s,_ses))
+
+_c,_j=req(B23,'/api/caregiver/actions')
+check('بخش۲۳ GET ناشناس /api/caregiver/actions رد می‌شود', _c==403 and _j.get('error')=='caregiver_session_required', (_c,_j))
+_c,_j=req(B23,'/api/caregiver/actions/%s/deliver'%_aid,'POST',{})
+check('بخش۲۳ deliver ناشناس رد می‌شود', _c==403 and _j.get('error')=='caregiver_session_required', (_c,_j))
+_c,_j=req_raw(B23,'/api/caregiver/actions',json.dumps({}).encode(),'GET')
+check('بخش۲۳ توکن جعلی رد می‌شود', _c==403, (_c,_j))
+
+# کنترل مثبت: اگر فقط ۴۰۳ را بسنجیم، ممکن است کل سطح مراقب از کار افتاده باشد.
+import http.client as _hc23
+def _req_tok(base,path,method='GET',data=None,tok=None):
+    u=urlparse(base); hd={'Content-Type':'application/json'}
+    if tok: hd['X-Caregiver-Token']=tok
+    b=json.dumps(data,ensure_ascii=False).encode() if data is not None else None
+    cn=_hc23.HTTPConnection(u.hostname,u.port,timeout=30); cn.request(method,path,body=b,headers=hd)
+    r=cn.getresponse(); raw=r.read(); cn.close()
+    try: return r.status,json.loads(raw or b'{}')
+    except Exception: return r.status,{'_raw':raw[:80].decode('utf-8','replace')}
+_c,_j=_req_tok(B23,'/api/caregiver/actions',tok=_tok)
+check('بخش۲۳ مراقب دارای توکن فهرست اقدام‌ها را می‌بیند', _c==200 and len(_j.get('items',[]))>=1, (_c,_j))
+_c,_j=_req_tok(B23,'/api/caregiver/actions/%s/deliver'%_aid,'POST',{'delivered_by':'نگهبان تست'},tok=_tok)
+check('بخش۲۳ مراقب دارای توکن می‌تواند تحویل را ثبت کند', _c==200 and _j.get('status')=='delivered', (_c,_j))
+# مسیر سالمند نباید بسته شود: index.html هیچ توکنی ندارد.
+_c,_j=req(B23,'/api/caregiver/call-request','POST',{'reason':'کنترل مثبت'})
+check('بخش۲۳ درخواست تماس سالمند بدون توکن کار می‌کند', _c==201, (_c,_j))
+
+_s23.shutdown(); _s23.server_close()
+
 print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))
 if failures:
