@@ -1,4 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  isAccessibilityTool="true" — حیاتی است.
+
+  در اندروید ۱۷ (و بیلدهای Canary از ۲۶۰۲ به بعد) حالت «Advanced Protection»
+  مجوز سرویس دسترس‌پذیری را از اپ‌هایی که این پرچم را ندارند به‌صورت خودکار
+  لغو می‌کند و کلید فعال‌سازی را خاکستری می‌کند («Restricted by Advanced
+  Protection»). بدون این پرچم، قابلیت کنترل دستگاه روی آن دستگاه‌ها بی‌صدا
+  از کار می‌افتد.
+
+  سپندیار صادقانه واجد شرایط است: فهرست دسته‌های مجازِ گوگل شامل «ابزارهای
+  ورودی صوتی» برای کاربران با محدودیت حرکتی/شناختی است و سپندیار دقیقاً برای
+  سالمندانی ساخته شده که کار با صفحه‌لمسی برایشان دشوار است و با صدا دستگاه
+  را اداره می‌کنند. این ادعا نیازمند اعلام در Play Console و ویدئوی کوتاه
+  معرفی است (به README مراجعه شود)؛ اعلام نادرست باعث رد شدن در Play و
+  مسدود شدن توسط Play Protect می‌شود.
+
+  flagIncludeNotImportantViews — بسیاری از کنترل‌های اپ‌ها با
+  importantForAccessibility="no" علامت خورده‌اند و بدون این پرچم در درخت
+  گره‌ها دیده نمی‌شوند، پس SmartSelector اصلاً پیدایشان نمی‌کرد.
+
+  flagRequestTouchExplorationMode عمداً فعال نیست: سپندیار صفحه‌خوان نیست و
+  این حالت، لمس کاربر را می‌بلعد.
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/accessibility_description"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewFocused"
@@ -6,4 +29,5 @@
     android:notificationTimeout="100"
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
-    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows" />
+    android:isAccessibilityTool="true"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews" />

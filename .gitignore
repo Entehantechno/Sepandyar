@@ -5,3 +5,6 @@ __pycache__/
 sepandyar-stage*.zip
 *.db-wal
 *.db-shm
+
+# وابستگی‌های آزمون جاوااسکریپت (wave_engine.test.js) — symlink به بیرون از مخزن
+node_modules

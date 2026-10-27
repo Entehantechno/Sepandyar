@@ -65,13 +65,38 @@ class MainActivity : Activity() {
         setContentView(web)
         // نتیجه هر کار کنترل صفحه به رابط وب برمی‌گردد
         ScreenTaskRunner.onResult = { result -> reportTaskResult(result) }
+        /*
+         * POST_NOTIFICATIONS هم درخواست می‌شود: از اندروید ۱۳ به بعد بدون آن،
+         * اعلانِ سرویس پیش‌زمینه نشان داده نمی‌شود و سالمند هیچ نشانه‌ای از
+         * فعال بودن سپندیار نمی‌بیند. خودِ سرویس اجرا می‌شود، پس این مجوز
+         * شرط شروع سرویس نیست و در onRequestPermissionsResult هم مانع نیست.
+         */
+        val needed = mutableListOf<String>()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 40)
+            needed.add(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (needed.isNotEmpty()) requestPermissions(needed.toTypedArray(), 40)
         else startListeningService()
     }
 
     private fun startListeningService() { val intent = Intent(this, ListeningService::class.java); if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent) }
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) { super.onRequestPermissionsResult(requestCode, permissions, grantResults); if (requestCode == 40 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startListeningService() }
+
+    /**
+     * نتیجهٔ مجوزها را با نامِ خودِ مجوز می‌سنجیم، نه با جایگاهش در آرایه.
+     * نسخهٔ پیشین grantResults.firstOrNull() را می‌دید؛ با اضافه شدن
+     * POST_NOTIFICATIONS، نتیجهٔ میکروفن دیگر لزوماً در خانهٔ اول نیست و
+     * سرویس گوش‌دادن هرگز شروع نمی‌شد.
+     */
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 40) return
+        val micGranted = permissions.indexOf(Manifest.permission.RECORD_AUDIO)
+            .takeIf { it >= 0 }
+            ?.let { grantResults.getOrNull(it) == PackageManager.PERMISSION_GRANTED }
+        if (micGranted == true) startListeningService()
+    }
 
     inner class AppBridge {
         @JavascriptInterface fun openAccessibilitySettings() {
@@ -97,9 +122,22 @@ class MainActivity : Activity() {
         @JavascriptInterface fun saveVoiceProfile(samples: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("voice_samples", samples).putLong("voice_enrolled_at", System.currentTimeMillis()).apply() }
         @JavascriptInterface fun callCaregiver(phone: String) { if (phone.isNotBlank()) startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))) }
         @JavascriptInterface fun tvCommand(command: String): Boolean { return TvCommandRouter.execute(this@MainActivity, command) }
-        @JavascriptInterface fun launchApprovedPackage(packageName: String) {
-            if (!ApprovedApps.contains(packageName)) return
-            packageManager.getLaunchIntentForPackage(packageName)?.let { startActivity(it) }
+        /**
+         * باز کردن یک اپ تأییدشده.
+         *
+         * نوع بازگشت عمداً Boolean است: ScreenTaskRunner.start پارامتر
+         * «launch: (String) -> Boolean» می‌گیرد، پس لامبدای
+         * «{ pkg -> launchApprovedPackage(pkg) }» باید Boolean برگرداند.
+         * با نوع بازگشت Unit، آن lambda از نوع (String) -> Unit می‌شد و
+         * کاتلین آن را به (String) -> Boolean تبدیل نمی‌کند — یعنی کل فایل
+         * کامپایل نمی‌شد و قابلیت کنترل دستگاه هرگز ساخته نمی‌شد.
+         *
+         * حالا لایهٔ وب هم می‌تواند بفهمد اپ واقعاً باز شد یا نه.
+         */
+        @JavascriptInterface fun launchApprovedPackage(packageName: String): Boolean {
+            if (!ApprovedApps.contains(packageName)) return false
+            val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return false
+            return try { startActivity(intent); true } catch (e: Exception) { false }
         }
         @JavascriptInterface fun requestScreenAction(action: String, payload: String) {
             ScreenControlService.pendingAction = ScreenAction(action, payload)

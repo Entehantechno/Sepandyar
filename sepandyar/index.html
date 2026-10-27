@@ -20,7 +20,10 @@ html[data-textscale="xxl"]{font-size:32px}
 *{box-sizing:border-box}body{margin:0;background:#edf3ef;color:var(--ink);font-family:Vazirmatn,Tahoma,Arial,sans-serif}/* large-text قدیمی به data-textscale منتقل شد؛ این قاعده فقط برای سازگاری باقی می‌ماند */
 body.large-text{font-size:1.125rem}body.high-contrast{--cream:#fff;--ink:#091f1c;--muted:#3e514c;--line:#b6c5bf}body.reduce-motion *{animation:none!important;transition:none!important}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}:focus-visible{outline:4px solid #2f806c;outline-offset:3px} button{font:inherit;border:0;cursor:pointer;color:inherit}.app{width:100%;max-width:430px;min-height:100vh;margin:auto;background:var(--cream);position:relative;overflow:hidden;box-shadow:0 0 80px rgba(21,50,45,.12);padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 header{padding:28px 24px 14px;display:flex;align-items:center;justify-content:space-between}.brand{display:flex;gap:11px;align-items:center}.brand-mark{width:42px;height:42px;background:var(--mint);border-radius:15px;display:grid;place-items:center;font-size:1.4375rem}.eyebrow{font-size:1rem;color:var(--muted);margin-bottom:2px}.brand h1{font-size:1.25rem;margin:0;font-weight:800}.icon-btn{width:48px;height:48px;border-radius:15px;background:white;box-shadow:var(--shadow);font-size:1.3125rem;position:relative}.dot{width:8px;height:8px;position:absolute;background:var(--danger);border-radius:50%;top:9px;left:10px;border:2px solid white}
-main{padding:8px 20px 110px}.welcome{font-size:1.6875rem;line-height:1.5;margin:6px 4px 20px;font-weight:700}.welcome span{color:#55ae92}.assistant-card{background:var(--mint);border-radius:28px;padding:22px 20px 18px;min-height:272px;position:relative;overflow:hidden}.assistant-card:after{content:'';width:230px;height:230px;border:1px solid rgba(255,255,255,.35);border-radius:50%;position:absolute;left:-85px;bottom:-120px}.live{display:flex;align-items:center;gap:9px;color:#296858;font-size:1rem;font-weight:600}.pulse{width:10px;height:10px;border-radius:50%;background:#3caa88;box-shadow:0 0 0 6px rgba(60,170,136,.14)}.assistant-card h2{font-size:1.4375rem;margin:14px 0 20px;text-align:center;width:100%}.wave{height:67px;display:flex;align-items:center;justify-content:center;gap:6px;direction:ltr}.wave i{width:5px;background:#347d6d;border-radius:5px;display:block;transform:scaleY(.35);opacity:.55}.wave.speaking i{animation:wave 1s ease-in-out infinite alternate;opacity:1}.wave i:nth-child(1){height:22px}.wave i:nth-child(2){height:42px;animation-delay:.1s}.wave i:nth-child(3){height:29px;animation-delay:.2s}.wave i:nth-child(4){height:56px;animation-delay:.3s}.wave i:nth-child(5){height:35px;animation-delay:.4s}.wave i:nth-child(6){height:66px;animation-delay:.5s}.wave i:nth-child(7){height:43px;animation-delay:.6s}.wave i:nth-child(8){height:25px;animation-delay:.7s}.wave i:nth-child(9){height:52px;animation-delay:.8s}.wave i:nth-child(10){height:34px;animation-delay:.9s}.wave i:nth-child(11){height:61px;animation-delay:1s}.wave i:nth-child(12){height:25px;animation-delay:1.1s}.wave i:nth-child(13){height:43px;animation-delay:1.2s}.wave i:nth-child(14){height:20px;animation-delay:1.3s}@keyframes wave{to{transform:scaleY(.45);opacity:.65}}.voice-btn{position:absolute;bottom:17px;right:20px;left:20px;background:#fff;color:#276657;height:51px;border-radius:17px;font-weight:700;box-shadow:0 5px 12px rgba(46,100,84,.08)}.voice-btn b{font-size:1.125rem;margin-left:7px}.always-listening{position:absolute;bottom:17px;right:20px;left:20px;height:51px;border-radius:17px;background:rgba(255,255,255,.78);color:#276657;display:flex;align-items:center;justify-content:center;gap:9px;font-size:1rem}.always-listening span:last-child{font-size:1rem;color:#6e8d84;margin-right:3px}.mic-live{font-size:1rem;color:#42aa88;animation:micblink 1.3s infinite}@keyframes micblink{0%,100%{opacity:1}50%{opacity:.35}}.section-head{display:flex;align-items:center;justify-content:space-between;margin:27px 3px 13px}.section-head h3{font-size:1.125rem;margin:0}.link{font-size:1rem;color:#4a9d84;background:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.action{min-height:116px;border-radius:22px;padding:17px;text-align:right;display:flex;flex-direction:column;justify-content:space-between;box-shadow:0 5px 18px rgba(42,72,61,.04);transition:.2s}.action:hover{transform:translateY(-2px)}.action .ico{font-size:1.6875rem}.action strong{font-size:1rem}.action small{font-size:1rem;color:#617570;margin-top:3px}.mint{background:#e3f5ed}.blue{background:#e7f1f7}.peach{background:#fbeadb}.lav{background:#eeeafb}.today{background:white;border:1px solid var(--line);border-radius:22px;padding:17px;box-shadow:var(--shadow)}.task{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #eef2f0}.task:last-child{border-bottom:0;padding-bottom:0}.time{color:var(--muted);font-size:1rem;width:48px}.pill{width:48px;height:48px;background:#e7f1f7;border-radius:14px;display:grid;place-items:center;font-size:1.25rem}.task-info{flex:1}.task-info strong{font-size:1rem;display:block}.task-info small{font-size:1rem;color:var(--muted)}.check{width:28px;height:28px;border-radius:50%;border:2px solid #b7cbc4;background:white;color:white}.check.done{background:#53b798;border-color:#53b798}.bottom{position:fixed;bottom:0;width:100%;max-width:430px;height:96px;background:rgba(255,255,255,.98);border-top:1px solid #edf0ee;display:flex;justify-content:flex-start;align-items:center;z-index:5;padding:6px 3px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;gap:2px}.bottom::-webkit-scrollbar{display:none}.nav{background:none;color:#8b9a95;display:flex;flex:0 0 78px;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:1rem;min-width:70px;min-height:68px;border-radius:18px}.nav span{font-size:1.6875rem;line-height:1}.nav.active{background:#e8f6f0}.nav.active span{background:#d5f0e6;border-radius:14px;padding:5px 14px;margin-top:-3px}.nav.active{color:#368b73;font-weight:700}.nav.active span{background:#e0f5ed;border-radius:13px;padding:4px 13px;margin-top:-4px}.panel{display:none}.panel.active{display:block}.metric{background:white;padding:17px;border-radius:20px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;box-shadow:var(--shadow)}.metric .num{font-size:1.5625rem;font-weight:800}.metric small{color:var(--muted);display:block}.metric .badge{padding:6px 10px;border-radius:10px;background:#e7f6ee;color:#257c60;font-size:1rem}.modal-bg{display:none;position:fixed;inset:0;background:rgba(19,42,37,.4);z-index:10;align-items:flex-end;justify-content:center}.modal-bg.open{display:flex}.modal{background:var(--cream);width:100%;max-width:430px;border-radius:28px 28px 0 0;padding:24px 22px 32px;animation:up .25s ease}.modal h2{margin:4px 0 7px;font-size:1.3125rem}.modal p{color:var(--muted);font-size:1rem;line-height:1.8}.modal-actions{display:flex;gap:10px;margin-top:20px}.modal-actions button{height:53px;border-radius:16px;flex:1;font-weight:700}.primary{background:#5abb9c;color:white}.secondary{background:#e8f0ec;color:#477065}.safety{background:#fff0ef;color:#b1504a;padding:13px 15px;border-radius:15px;font-size:1rem;line-height:1.7;margin-top:13px}.privacy-strip{background:#f1f7f4;border:1px solid #dfebe5;border-radius:15px;margin-top:12px;padding:10px 12px;display:flex;align-items:center;gap:7px;color:#47766a;font-size:1rem}.wallet-card{background:linear-gradient(135deg,#214e4a,#347d6d);color:white;border-radius:25px;padding:22px;box-shadow:0 14px 30px rgba(27,73,65,.18)}.wallet-card small{opacity:.76}.wallet-card strong{display:block;font-size:1.9375rem;margin:10px 0 20px;letter-spacing:.5px}.wallet-card strong span{font-size:1rem;font-weight:500}.wallet-actions{display:flex;gap:8px}.wallet-actions button{flex:1;background:rgba(255,255,255,.16);color:white;border:1px solid rgba(255,255,255,.24);border-radius:13px;padding:10px 7px;font-size:1rem}.action,.voice-btn,.primary,.secondary,.nav,.check,.wallet-actions button{transition:background-color .18s ease,box-shadow .18s ease,transform .18s ease}.action:active,.voice-btn:active,.primary:active,.secondary:active,.nav:active,.wallet-actions button:active{transform:scale(.98)}.check.done{animation:check-pop .22s ease}@keyframes check-pop{0%{transform:scale(.7);opacity:.5}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}.success-flash{animation:success-flash .5s ease}@keyframes success-flash{0%{box-shadow:0 0 0 0 rgba(84,191,160,.5)}100%{box-shadow:0 0 0 12px rgba(84,191,160,0)}}@media (prefers-reduced-motion:reduce){.action,.voice-btn,.primary,.secondary,.nav,.check,.wallet-actions button{transition:none}.check.done,.success-flash{animation:none}}.plan-card{background:white;border:1px solid var(--line);border-radius:18px;padding:15px;margin:10px 0;display:flex;align-items:center;justify-content:space-between}.plan-card.selected{border:2px solid var(--mint-strong);background:#f1faf6}.plan-card b{display:block;font-size:1rem}.plan-card small{display:block;color:var(--muted);font-size:1rem;margin-top:4px}.plan-card strong{text-align:left;font-size:1rem}.privacy-strip span{font-size:1rem}.features-launch{width:100%;margin-top:18px;min-height:78px;border:1px solid #dfeae5;background:#fff;border-radius:20px;display:grid;grid-template-columns:44px 1fr;grid-template-rows:1fr 1fr;align-items:center;text-align:right;padding:12px 15px;box-shadow:var(--shadow);color:#347d6d}.features-launch:first-letter{font-size:1.5rem}.features-launch span{font-weight:800;font-size:1rem}.features-launch small{grid-column:2;color:var(--muted);font-size:1rem}.secondary-features{display:none}.secondary-features .grid{margin-top:12px}.privacy-strip small{color:#78918a;margin-right:auto}.setting-row{background:white;padding:15px;border-radius:17px;margin:9px 0;display:flex;align-items:center;justify-content:space-between;font-size:1rem}.name-label{display:block;font-size:1rem;color:var(--muted);margin:15px 0 7px}.name-input{flex:1;min-width:0;border:1px solid var(--line);border-radius:14px;padding:0 13px;font:inherit;color:var(--ink);background:white;height:48px}.name-input.full{width:100%;display:block}.range-row{display:flex;align-items:center;gap:8px;margin:8px 0 14px}.range-row .name-input{height:40px;width:80px}.save-name{padding:0 17px;border-radius:14px}.toggle{width:45px;height:26px;border-radius:20px;background:#58b99a;padding:3px}.toggle:after{content:'';display:block;width:20px;height:20px;border-radius:50%;background:white}.transcript{font-size:1rem;color:#48796b;text-align:center;min-height:24px;line-height:1.5;margin-top:7px}.danger-btn{width:100%;height:53px;border-radius:16px;background:#fff0ef;color:#b1504a;font-weight:700;margin-top:13px}.confirm-box{background:#e7f1f7;border-radius:17px;padding:15px;line-height:2;font-size:1rem}.progress{height:7px;background:#e3ede9;border-radius:10px;overflow:hidden;margin-top:13px}.progress i{display:block;height:100%;width:58%;background:#58b99a;border-radius:10px}
+main{padding:8px 20px 110px}.welcome{font-size:1.6875rem;line-height:1.5;margin:6px 4px 20px;font-weight:700}.welcome span{color:#55ae92}.assistant-card{background:var(--mint);border-radius:28px;padding:22px 20px 18px;min-height:272px;position:relative;overflow:hidden}.assistant-card:after{content:'';width:230px;height:230px;border:1px solid rgba(255,255,255,.35);border-radius:50%;position:absolute;left:-85px;bottom:-120px}.live{display:flex;align-items:center;gap:9px;color:#296858;font-size:1rem;font-weight:600}.pulse{width:10px;height:10px;border-radius:50%;background:#3caa88;box-shadow:0 0 0 6px rgba(60,170,136,.14)}.assistant-card h2{font-size:1.4375rem;margin:14px 0 20px;text-align:center;width:100%}/* موج گفتار — ارتفاع هر میله از راه متغیر --h و مقیاس از راه --s تنظیم
+   می‌شود تا JS بتواند آن را با صدای واقعی مدل هدایت کند. fallback صرفاً-CSS
+   (وقتی JS بار نشده) با انیمیشن wave-fallback حفظ شده است. */
+.wave{height:67px;display:flex;align-items:center;justify-content:center;gap:6px;direction:ltr}.wave i{width:5px;height:var(--h,34px);background:#347d6d;border-radius:5px;display:block;transform:scaleY(var(--s,.35));opacity:.55;transform-origin:center;transition:opacity .18s ease}.wave i:nth-child(1){--h:22px}.wave i:nth-child(2){--h:42px}.wave i:nth-child(3){--h:29px}.wave i:nth-child(4){--h:56px}.wave i:nth-child(5){--h:35px}.wave i:nth-child(6){--h:66px}.wave i:nth-child(7){--h:43px}.wave i:nth-child(8){--h:61px}.wave i:nth-child(9){--h:38px}.wave i:nth-child(10){--h:52px}.wave i:nth-child(11){--h:31px}.wave i:nth-child(12){--h:58px}.wave i:nth-child(13){--h:40px}.wave i:nth-child(14){--h:24px}.wave.speaking i{opacity:1}.wave.speaking:not(.live):not(.js) i{animation:wave-fallback 1s ease-in-out infinite alternate;animation-delay:calc(.09s * (var(--n,1) - 1))}@keyframes wave-fallback{from{transform:scaleY(.34)}to{transform:scaleY(.95)}}@keyframes wave{to{transform:scaleY(.45);opacity:.65}}.voice-btn{position:absolute;bottom:17px;right:20px;left:20px;background:#fff;color:#276657;height:51px;border-radius:17px;font-weight:700;box-shadow:0 5px 12px rgba(46,100,84,.08)}.voice-btn b{font-size:1.125rem;margin-left:7px}.always-listening{position:absolute;bottom:17px;right:20px;left:20px;height:51px;border-radius:17px;background:rgba(255,255,255,.78);color:#276657;display:flex;align-items:center;justify-content:center;gap:9px;font-size:1rem}.always-listening span:last-child{font-size:1rem;color:#6e8d84;margin-right:3px}.mic-live{font-size:1rem;color:#42aa88;animation:micblink 1.3s infinite}@keyframes micblink{0%,100%{opacity:1}50%{opacity:.35}}.section-head{display:flex;align-items:center;justify-content:space-between;margin:27px 3px 13px}.section-head h3{font-size:1.125rem;margin:0}.link{font-size:1rem;color:#4a9d84;background:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.action{min-height:116px;border-radius:22px;padding:17px;text-align:right;display:flex;flex-direction:column;justify-content:space-between;box-shadow:0 5px 18px rgba(42,72,61,.04);transition:.2s}.action:hover{transform:translateY(-2px)}.action .ico{font-size:1.6875rem}.action strong{font-size:1rem}.action small{font-size:1rem;color:#617570;margin-top:3px}.mint{background:#e3f5ed}.blue{background:#e7f1f7}.peach{background:#fbeadb}.lav{background:#eeeafb}.today{background:white;border:1px solid var(--line);border-radius:22px;padding:17px;box-shadow:var(--shadow)}.task{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #eef2f0}.task:last-child{border-bottom:0;padding-bottom:0}.time{color:var(--muted);font-size:1rem;width:48px}.pill{width:48px;height:48px;background:#e7f1f7;border-radius:14px;display:grid;place-items:center;font-size:1.25rem}.task-info{flex:1}.task-info strong{font-size:1rem;display:block}.task-info small{font-size:1rem;color:var(--muted)}.check{width:28px;height:28px;border-radius:50%;border:2px solid #b7cbc4;background:white;color:white}.check.done{background:#53b798;border-color:#53b798}.bottom{position:fixed;bottom:0;width:100%;max-width:430px;height:96px;background:rgba(255,255,255,.98);border-top:1px solid #edf0ee;display:flex;justify-content:flex-start;align-items:center;z-index:5;padding:6px 3px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;gap:2px}.bottom::-webkit-scrollbar{display:none}.nav{background:none;color:#8b9a95;display:flex;flex:0 0 78px;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:1rem;min-width:70px;min-height:68px;border-radius:18px}.nav span{font-size:1.6875rem;line-height:1}.nav.active{background:#e8f6f0}.nav.active span{background:#d5f0e6;border-radius:14px;padding:5px 14px;margin-top:-3px}.nav.active{color:#368b73;font-weight:700}.nav.active span{background:#e0f5ed;border-radius:13px;padding:4px 13px;margin-top:-4px}.panel{display:none}.panel.active{display:block}.metric{background:white;padding:17px;border-radius:20px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;box-shadow:var(--shadow)}.metric .num{font-size:1.5625rem;font-weight:800}.metric small{color:var(--muted);display:block}.metric .badge{padding:6px 10px;border-radius:10px;background:#e7f6ee;color:#257c60;font-size:1rem}.modal-bg{display:none;position:fixed;inset:0;background:rgba(19,42,37,.4);z-index:10;align-items:flex-end;justify-content:center}.modal-bg.open{display:flex}.modal{background:var(--cream);width:100%;max-width:430px;border-radius:28px 28px 0 0;padding:24px 22px 32px;animation:up .25s ease}.modal h2{margin:4px 0 7px;font-size:1.3125rem}.modal p{color:var(--muted);font-size:1rem;line-height:1.8}.modal-actions{display:flex;gap:10px;margin-top:20px}.modal-actions button{height:53px;border-radius:16px;flex:1;font-weight:700}.primary{background:#5abb9c;color:white}.secondary{background:#e8f0ec;color:#477065}.safety{background:#fff0ef;color:#b1504a;padding:13px 15px;border-radius:15px;font-size:1rem;line-height:1.7;margin-top:13px}.privacy-strip{background:#f1f7f4;border:1px solid #dfebe5;border-radius:15px;margin-top:12px;padding:10px 12px;display:flex;align-items:center;gap:7px;color:#47766a;font-size:1rem}.wallet-card{background:linear-gradient(135deg,#214e4a,#347d6d);color:white;border-radius:25px;padding:22px;box-shadow:0 14px 30px rgba(27,73,65,.18)}.wallet-card small{opacity:.76}.wallet-card strong{display:block;font-size:1.9375rem;margin:10px 0 20px;letter-spacing:.5px}.wallet-card strong span{font-size:1rem;font-weight:500}.wallet-actions{display:flex;gap:8px}.wallet-actions button{flex:1;background:rgba(255,255,255,.16);color:white;border:1px solid rgba(255,255,255,.24);border-radius:13px;padding:10px 7px;font-size:1rem}.action,.voice-btn,.primary,.secondary,.nav,.check,.wallet-actions button{transition:background-color .18s ease,box-shadow .18s ease,transform .18s ease}.action:active,.voice-btn:active,.primary:active,.secondary:active,.nav:active,.wallet-actions button:active{transform:scale(.98)}.check.done{animation:check-pop .22s ease}@keyframes check-pop{0%{transform:scale(.7);opacity:.5}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}.success-flash{animation:success-flash .5s ease}@keyframes success-flash{0%{box-shadow:0 0 0 0 rgba(84,191,160,.5)}100%{box-shadow:0 0 0 12px rgba(84,191,160,0)}}@media (prefers-reduced-motion:reduce){.action,.voice-btn,.primary,.secondary,.nav,.check,.wallet-actions button{transition:none}.check.done,.success-flash{animation:none}}.plan-card{background:white;border:1px solid var(--line);border-radius:18px;padding:15px;margin:10px 0;display:flex;align-items:center;justify-content:space-between}.plan-card.selected{border:2px solid var(--mint-strong);background:#f1faf6}.plan-card b{display:block;font-size:1rem}.plan-card small{display:block;color:var(--muted);font-size:1rem;margin-top:4px}.plan-card strong{text-align:left;font-size:1rem}.privacy-strip span{font-size:1rem}.features-launch{width:100%;margin-top:18px;min-height:78px;border:1px solid #dfeae5;background:#fff;border-radius:20px;display:grid;grid-template-columns:44px 1fr;grid-template-rows:1fr 1fr;align-items:center;text-align:right;padding:12px 15px;box-shadow:var(--shadow);color:#347d6d}.features-launch:first-letter{font-size:1.5rem}.features-launch span{font-weight:800;font-size:1rem}.features-launch small{grid-column:2;color:var(--muted);font-size:1rem}.secondary-features{display:none}.secondary-features .grid{margin-top:12px}.privacy-strip small{color:#78918a;margin-right:auto}.setting-row{background:white;padding:15px;border-radius:17px;margin:9px 0;display:flex;align-items:center;justify-content:space-between;font-size:1rem}.name-label{display:block;font-size:1rem;color:var(--muted);margin:15px 0 7px}.name-input{flex:1;min-width:0;border:1px solid var(--line);border-radius:14px;padding:0 13px;font:inherit;color:var(--ink);background:white;height:48px}.name-input.full{width:100%;display:block}.range-row{display:flex;align-items:center;gap:8px;margin:8px 0 14px}.range-row .name-input{height:40px;width:80px}.save-name{padding:0 17px;border-radius:14px}.toggle{width:45px;height:26px;border-radius:20px;background:#58b99a;padding:3px}.toggle:after{content:'';display:block;width:20px;height:20px;border-radius:50%;background:white}.transcript{font-size:1rem;color:#48796b;text-align:center;min-height:24px;line-height:1.5;margin-top:7px}.danger-btn{width:100%;height:53px;border-radius:16px;background:#fff0ef;color:#b1504a;font-weight:700;margin-top:13px}.confirm-box{background:#e7f1f7;border-radius:17px;padding:15px;line-height:2;font-size:1rem}.progress{height:7px;background:#e3ede9;border-radius:10px;overflow:hidden;margin-top:13px}.progress i{display:block;height:100%;width:58%;background:#58b99a;border-radius:10px}
 @media (min-width:600px) and (orientation:portrait){.app{max-width:760px}.app main{padding-left:40px;padding-right:40px}.assistant-card{max-width:650px;margin:20px auto}.bottom{max-width:760px}.grid{grid-template-columns:repeat(3,1fr)}.nav{flex-basis:96px}.section-head,.today,.metric,.wallet-card,.safety,.privacy-strip{max-width:680px;margin-left:auto;margin-right:auto}}@media (min-width:840px) and (orientation:portrait){.app{max-width:1100px}.app main{padding-left:64px;padding-right:64px}.assistant-card{max-width:760px}.bottom{max-width:1100px}.nav{flex-basis:120px}.grid{grid-template-columns:repeat(4,1fr)}}@media (orientation:landscape) and (min-width:800px){.app{max-width:1280px;min-height:100vh}.app header{padding:34px 64px 18px}.app main{padding:18px 64px 120px}.assistant-card{max-width:900px;margin:20px auto;min-height:390px;padding:36px}.assistant-card h2{font-size:2.375rem}.wave{height:120px;gap:10px}.wave i{width:9px}.always-listening{height:64px;font-size:1.125rem}.bottom{max-width:1280px;height:104px}.nav{min-width:130px;font-size:1.0625rem}.nav span{font-size:1.9375rem}.grid{grid-template-columns:repeat(4,1fr);max-width:1100px;margin-left:auto;margin-right:auto}.today,.metric,.wallet-card,.safety,.privacy-strip{max-width:1100px;margin-left:auto;margin-right:auto}.welcome{text-align:center;font-size:2.25rem}}
 html{scroll-padding-top:6rem}
 /* --- دسترسی‌پذیری WCAG 2.2 ---
@@ -186,7 +189,9 @@ function dismissClarification(reason){if(clarifyTimer)clearTimeout(clarifyTimer)
 function closeClarifyPopup(){const el=document.getElementById('clarify-popup');if(el)el.remove();clarifyState=null}
 function dispatchClarified(action){switch(action){case 'meds':go('meds');break;case 'vitals':go('vitals');break;case 'symptom':openSymptomModal();break;case 'caregiver_call':requestCaregiverCall();break;case 'food_order':startVoiceOrder();break;case 'taxi':openScreenControl();break;case 'education':speakHealthTip();break;case 'wallet':go('wallet');break;case 'appointment':openModal('appointments');break;case 'screen_control':openScreenControl();break;case 'chat':speakBack('من اینجام؛ هر چه دوست دارید بگویید، گوش می‌دهم.');break;default:openFeatures()}}
 function SmartNormalize(s){return (s||'').replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/[َُِّْ]/g,'').toLowerCase()}function analyzeFood(){document.getElementById('modal-content').innerHTML='<div class="live"><i class="pulse"></i> در حال بررسی عکس</div><h2>کمی صبر کنید...</h2><p>دارم مواد غذایی و اندازه وعده را بررسی می‌کنم.</p><div class="progress"><i style="width:78%"></i></div>';setTimeout(()=>{document.getElementById('modal-content').innerHTML='<h2>برای شما مناسب است</h2><div class="confirm-box">✅ سبزیجات و پروتئین مناسب<br>⚠️ کمی نمک دارد؛ بهتر است آب بیشتری بنوشید.<br>💡 پیشنهاد: نصف این مقدار نان کافی است.</div><div class="modal-actions"><button class="primary" onclick="closeModal();toast(\'غذا در دفترچه شما ثبت شد\')">متوجه شدم</button></div>'},1200)}function showOrderReview(){document.getElementById('modal-content').innerHTML='<h2>بررسی سفارش</h2><p>این سفارش را برای شما پیدا کردم:</p><div class="confirm-box">۲ × شیر کم‌چرب<br>۱ × نان سنگک<br><hr>مبلغ تقریبی: <b>۲۸۵٬۰۰۰ تومان</b></div><div class="safety">آیا سفارش و مبلغ را تأیید می‌کنید؟</div><div class="modal-actions"><button class="secondary" onclick="closeModal()">لغو</button><button class="primary" onclick="confirmOrder()">تأیید سفارش</button></div>'}function confirmOrder(){if(window.SepandyarNative){window.SepandyarNative.launchApprovedPackage('com.snappfood');window.SepandyarNative.requestScreenAction('tap_text','افزودن به سبد');}document.getElementById('modal-content').innerHTML='<div class="live"><i class="pulse"></i> سفارش ثبت شد</div><h2>خرید شما انجام شد</h2><p>فروشگاه سفارش را دریافت کرد. رسید برای مراقب شما نیز ارسال می‌شود.</p><div class="confirm-box">تحویل تقریبی: امروز، ساعت ۱۸ تا ۲۰</div><div class="modal-actions"><button class="primary" onclick="closeModal();toast(\'رسید سفارش ذخیره شد\')">خیلی خوب</button></div>'}
-let realtimeActive=false;async function tryRealtimeVoice(){if(!window.RTCPeerConnection||!navigator.mediaDevices?.getUserMedia)return false;const session=await apiRequest('/api/realtime/session?id='+encodeURIComponent(localStorage.getItem('voiceProfileId')||'default'));const token=session?.client_secret?.value;if(!token)return false;const pc=new RTCPeerConnection();const audio=document.createElement('audio');audio.autoplay=true;audio.setAttribute('aria-label','صدای دستیار');pc.ontrack=e=>{audio.srcObject=e.streams[0];document.body.appendChild(audio)};const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});stream.getTracks().forEach(t=>pc.addTrack(t,stream));const dc=pc.createDataChannel('oai-events');dc.onopen=()=>{realtimeActive=true;dc.send(JSON.stringify({type:'session.update',session:{type:'realtime',output_modalities:['audio']}}))};dc.onmessage=e=>{try{const x=JSON.parse(e.data);if(x.type==='response.output_audio.delta')setSpeaking(true);if(x.type==='response.output_audio_transcript.delta')transcript.textContent+=x.delta||'';if(x.type==='input_audio_buffer.speech_started'){setSpeaking(false);transcript.textContent='در حال شنیدن...'}if(x.type==='conversation.item.input_audio_transcription.completed'){transcript.textContent=x.transcript||'';guardLiveTranscript(x.transcript||'')}if(x.type==='response.done'){setSpeaking(false);transcript.textContent='گوش‌به‌فرمان شما هستم...'}}catch(_){}};const offer=await pc.createOffer();await pc.setLocalDescription(offer);const r=await fetch('https://api.openai.com/v1/realtime/calls',{method:'POST',body:offer.sdp,headers:{Authorization:'Bearer '+token,'Content-Type':'application/sdp'}});if(!r.ok)return false;await pc.setRemoteDescription({type:'answer',sdp:await r.text()});window.sepandyarRealtime={pc,stream,dc};return true}
+let realtimeActive=false;async function tryRealtimeVoice(){if(!window.RTCPeerConnection||!navigator.mediaDevices?.getUserMedia)return false;const session=await apiRequest('/api/realtime/session?id='+encodeURIComponent(localStorage.getItem('voiceProfileId')||'default'));const token=session?.client_secret?.value;if(!token)return false;const pc=new RTCPeerConnection();const audio=document.createElement('audio');audio.autoplay=true;audio.setAttribute('aria-label','صدای دستیار');pc.ontrack=e=>{audio.srcObject=e.streams[0];document.body.appendChild(audio);VoiceWave.attachStream(e.streams[0])};const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});stream.getTracks().forEach(t=>pc.addTrack(t,stream));const dc=pc.createDataChannel('oai-events');dc.onopen=()=>{realtimeActive=true;dc.send(JSON.stringify({type:'session.update',session:{type:'realtime',output_modalities:['audio']}}))};dc.onmessage=e=>{try{const x=JSON.parse(e.data);if(x.type==='response.output_audio.delta')setSpeaking(true);if(x.type==='response.output_audio_transcript.delta')transcript.textContent+=x.delta||'';if(x.type==='input_audio_buffer.speech_started'){setSpeaking(false);transcript.textContent='در حال شنیدن...'}if(x.type==='conversation.item.input_audio_transcription.completed'){transcript.textContent=x.transcript||'';guardLiveTranscript(x.transcript||'')}if(x.type==='response.done'){setSpeaking(false);transcript.textContent='گوش‌به‌فرمان شما هستم...'}}catch(_){}};const offer=await pc.createOffer();await pc.setLocalDescription(offer);const r=await fetch('https://api.openai.com/v1/realtime/calls',{method:'POST',body:offer.sdp,headers:{Authorization:'Bearer '+token,'Content-Type':'application/sdp'}});if(!r.ok){VoiceWave.detachStream();return false}await pc.setRemoteDescription({type:'answer',sdp:await r.text()});window.sepandyarRealtime={pc,stream,dc,audio};return true}/* پایان جلسهٔ زنده: تحلیلگر صوتی و حلقهٔ موج را جدا می‌کند، وگرنه
+   AudioContext و requestAnimationFrame نشتی می‌کنند. */
+function stopRealtimeVoice(){const r=window.sepandyarRealtime;VoiceWave.detachStream();setSpeaking(false);if(r){try{r.dc&&r.dc.close()}catch(_){}try{r.stream&&r.stream.getTracks().forEach(t=>t.stop())}catch(_){}try{r.pc&&r.pc.close()}catch(_){}try{r.audio&&r.audio.remove()}catch(_){}window.sepandyarRealtime=null}realtimeActive=false}
 // حالت گوش‌دادن خودکار: در اپ native همین چرخه به موتور Speech-to-Text متصل می‌شود.
 let recognition;let listening=true;const transcript=document.getElementById('transcript');
 // ---- گفت‌وگوی زندهٔ فارسی با Gemini Live API (مسیرهٔ الف — پژوهش: docs/RESEARCH_LIVE_VOICE_AI_FA.md) ----
@@ -241,6 +246,222 @@ async function tryLiveVoice(){
  liveState={stopAudio,close:closeLive};
  return true;
 }
-function startAlwaysListening(){const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SpeechRecognition){simulateListening();return}let restarting=false;recognition=new SpeechRecognition();recognition.lang='fa-IR';recognition.continuous=true;recognition.interimResults=true;recognition.onresult=e=>{const last=Array.from(e.results).slice(-1)[0];const text=last[0].transcript;const conf=last[0].confidence;onSpeechResult(text,conf,e.results[e.results.length-1].isFinal)};recognition.onend=()=>{if(listening&&!restarting){restarting=true;setTimeout(()=>{try{recognition.start()}catch(e){}restarting=false},350)}};recognition.onerror=()=>{transcript.textContent='گوش می‌دهم؛ کافی است صحبت کنید';};try{recognition.start()}catch(e){}}function simulateListening(){const messages=['آماده‌ام؛ کافی است صحبت کنید','صدای شما را واضح می‌شنوم','برای کمک به شما آماده‌ام'];let i=0;setInterval(()=>{if(transcript)transcript.textContent=messages[i++%messages.length]},3200)}function setSpeaking(on){const w=document.getElementById('voice-wave');if(w)w.classList.toggle('speaking',!!on)}function speakBack(text){setSpeaking(true);if('speechSynthesis' in window){speechSynthesis.cancel();let u=new SpeechSynthesisUtterance(text);u.lang='fa-IR';u.onend=()=>setSpeaking(false);speechSynthesis.speak(u)}else setTimeout(()=>setSpeaking(false),Math.max(1200,text.length*55));setTimeout(()=>{setSpeaking(false);if(transcript)transcript.textContent='گوش می‌دهم؛ درخواست بعدی شما چیست؟'},2600)}const tabIds=['home','meds','vitals','wallet','settings'];let swipeX=0,swipeY=0;document.addEventListener('touchstart',e=>{swipeX=e.changedTouches[0].clientX;swipeY=e.changedTouches[0].clientY},{passive:true});document.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-swipeX,dy=e.changedTouches[0].clientY-swipeY;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.3){const current=document.querySelector('.panel.active')?.id||'home';const i=tabIds.indexOf(current);const next=dx>0?tabIds[Math.min(i+1,tabIds.length-1)]:tabIds[Math.max(i-1,0)];if(next!==current)go(next)}},{passive:true});window.addEventListener('load',()=>{if(needsServerSetup())setTimeout(openServerSetup,700);const n=localStorage.getItem('seniorName');const w=document.querySelector('.welcome');if(n&&w)w.innerHTML='سلام، <span>'+esc(n)+'</span><br>امروز حالتان چطور است؟';flushOfflineQueue();loadVoiceProfile().then(()=>{startPatienceWatchdog()}).catch(()=>{startPatienceWatchdog()});(async()=>{let ok=false;try{ok=await tryLiveVoice()}catch(e){}if(!ok){try{ok=await tryRealtimeVoice()}catch(e){}}if(!ok)startAlwaysListening()})();syncPlatform();syncMedicationList();syncCareSummary();checkMedicationReminders();checkProactivePrompts();setInterval(()=>{checkMedicationReminders();checkProactivePrompts()},60000)});if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));}
+function startAlwaysListening(){const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SpeechRecognition){simulateListening();return}let restarting=false;recognition=new SpeechRecognition();recognition.lang='fa-IR';recognition.continuous=true;recognition.interimResults=true;recognition.onresult=e=>{const last=Array.from(e.results).slice(-1)[0];const text=last[0].transcript;const conf=last[0].confidence;onSpeechResult(text,conf,e.results[e.results.length-1].isFinal)};recognition.onend=()=>{if(listening&&!restarting){restarting=true;setTimeout(()=>{try{recognition.start()}catch(e){}restarting=false},350)}};recognition.onerror=()=>{transcript.textContent='گوش می‌دهم؛ کافی است صحبت کنید';};try{recognition.start()}catch(e){}}function simulateListening(){const messages=['آماده‌ام؛ کافی است صحبت کنید','صدای شما را واضح می‌شنوم','برای کمک به شما آماده‌ام'];let i=0;setInterval(()=>{if(transcript)transcript.textContent=messages[i++%messages.length]},3200)}/* ============================================================
+   موتور موج گفتار (VoiceWave)
+   ------------------------------------------------------------
+   یک محدودیت سخت پلتفرمی وجود دارد که باید شفاف باشد: خروجی
+   speechSynthesis را نمی‌توان به Web Audio API رساند.
+   SpeechSynthesisUtterance نه MediaStream دارد، نه AudioBuffer و نه
+   AudioNode؛ صدا مستقیم به دستگاه صوتی سیستم می‌رود. پس «دامنهٔ
+   واقعی» صدای TTS در مرورگر قابل اندازه‌گیری نیست.
+
+   دو مسیر، دو راه‌حل:
+   ۱) مسیر صدای زنده (WebRTC) — یک MediaStream واقعی روی
+      audio.srcObject هست، پس AnalyserNode واقعی وصل می‌کنیم و میله‌ها
+      از دادهٔ واقعی دامنه/بسامد صدای مدل تغذیه می‌شوند.
+   ۲) مسیر TTS — پوشِ زمانی مشتق از رویدادهای واقعی خودِ گفتار
+      (onstart/onboundary/onend). این «زمان‌بندی واقعی گفتار» است، نه
+      دامنهٔ واقعی. در کد هم همین‌طور مستند شده تا ادعای گزاف نشود.
+   ============================================================ */
+const VoiceWave=(function(){
+  let bars=[],n=0,raf=0,active=false,mode='idle',t0=0,level=0;
+  let actx=null,analyser=null,freq=null,srcNode=null;
+  let dur=0,syllable=0,lastBoundary=0;
+  /*
+    ترجیح کاربر را در هر فراخوانی می‌خوانیم، نه یک‌بار در زمان ساخت.
+    کش کردنش باعث می‌شد تغییر تنظیمات «کاهش حرکت» بعد از بارگذاری صفحه
+    نادیده گرفته شود و انیمیشن برای کاربری که آن را خاموش کرده ادامه یابد.
+  */
+  const reduced=()=>{try{return !!(window.matchMedia&&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches)}catch(e){return false}};
+
+  function collect(){
+    const w=document.getElementById('voice-wave');
+    if(!w)return [];
+    const list=[].slice.call(w.querySelectorAll('i'));
+    list.forEach((el,i)=>el.style.setProperty('--n',String(i+1)));
+    /*
+      کلاس js انیمیشن صرفاً-CSS را خاموش می‌کند. ضروری است: در آبشار CSS،
+      انیمیشن در حال اجرا بر اعلام inline اولویت دارد، پس بدون آن هر مقدار
+      --s که JS می‌نویسد نادیده گرفته می‌شد و میله‌ها هرگز با صدا همگام
+      نمی‌شدند.
+    */
+    w.classList.add('js');
+    return list;
+  }
+  /* میانگین دامنهٔ واقعی از بسامدهای گفتار (۸۵ تا ۳۴۰۰ هرتز). */
+  function realLevel(){
+    if(!analyser||!freq)return 0;
+    analyser.getByteFrequencyData(freq);
+    const sr=actx?actx.sampleRate:48000;
+    const binHz=sr/(analyser.fftSize||1024);
+    let lo=Math.max(1,Math.floor(85/binHz));
+    let hi=Math.min(freq.length-1,Math.ceil(3400/binHz));
+    if(hi<=lo)hi=lo+1;
+    let sum=0;for(let i=lo;i<=hi;i++)sum+=freq[i];
+    return (sum/((hi-lo+1)*255));
+  }
+  /* پوشِ گفتار برای مسیر TTS: ریتم هجایی + ضربهٔ رویداد مرز کلمه. */
+  function envelope(t){
+    if(!dur)return .55;
+    const p=Math.min(1,t/dur);
+    const attack=Math.min(1,p/0.08);
+    const release=p>0.86?Math.max(0,(1-p)/0.14):1;
+    const beat=0.5+0.5*Math.sin(t/1000*2*Math.PI*4.2+syllable);
+    const kick=Math.exp(-(t-lastBoundary)/180);
+    return Math.max(0,Math.min(1,(0.34+0.66*beat)*attack*release+0.35*kick));
+  }
+  function frame(){
+    const now=performance.now();
+    const t=now-t0;
+    let lvl;
+    if(mode==='live'){
+      const r=realLevel();
+      level+=(r-level)*0.32;
+      lvl=level;
+    }else{
+      lvl=envelope(t);
+    }
+    const base=0.26+0.74*Math.max(0,Math.min(1,lvl));
+    for(let i=0;i<n;i++){
+      /* موج رونده: هر میله فاز خودش را دارد تا شکل «مواج» دیده شود. */
+      const ph=i/(n||1)*Math.PI*2;
+      /*
+        دو هارمونیک با هم جمع می‌شوند. یک سینوسِ تنها روی ۱۴ میله متقارن
+        است: میلهٔ i و i+7 فاز مکمل دارند ولی سینوس یکسان می‌دهند، پس ۱۴
+        میله فقط ۷ مقدار متمایز داشتند و موج آینه‌ای به نظر می‌رسید نه
+        رونده. هارمونیک دوم این تقارن را می‌شکند.
+      */
+      const hz=mode==='live'?1.5:1.25;
+      const wob=Math.max(0.12,Math.min(1.6,
+        0.72*Math.sin(t/1000*2*Math.PI*hz+ph)
+        +0.30*Math.sin(t/1000*2*Math.PI*(hz*2.17)+ph*2+0.7)+1.0));
+      /*
+        به‌جای بریدن سخت در یک کف، دامنه «فشرده» می‌شود. برش سخت باعث
+        می‌شد هرگاه wob کوچک شود چند میله کنار هم دقیقاً یک عدد بگیرند و
+        موج در نیمی از هر چرخه تخت شود. فشرده‌سازی، نسبت میان میله‌ها را
+        در تمام دامنه حفظ می‌کند.
+      */
+      const v=0.14+0.86*Math.max(0,Math.min(1,base*wob));
+      bars[i].style.setProperty('--s',v.toFixed(3));
+    }
+    raf=requestAnimationFrame(frame);
+  }
+  /*
+    حالت ایستا برای کاربرانی که «کاهش حرکت» را فعال کرده‌اند. چون در این
+    حالت انیمیشنی وجود ندارد، شکل موج تنها نشانهٔ «در حال صحبت» است؛ پس
+    دامنه عمداً بالا و کف‌دار نگه داشته می‌شود تا میله‌ها خاموش به نظر
+    نرسند. دامنهٔ پیشین (۰.۰۸ تا ۰.۹۲) چند میله را تقریباً نامرئی
+    می‌کرد و نشانهٔ بصری از بین می‌رفت.
+  */
+  function staticOn(){
+    for(let i=0;i<n;i++){
+      const ph=i/(n||1)*Math.PI*2;
+      bars[i].style.setProperty('--s',(0.78+0.2*Math.sin(ph)).toFixed(3));
+    }
+  }
+  function staticOff(){for(let i=0;i<n;i++)bars[i].style.setProperty('--s','.35')}
+  function loop(){if(!raf&&!reduced())raf=requestAnimationFrame(frame)}
+  function stopLoop(){if(raf){cancelAnimationFrame(raf);raf=0}}
+
+  function setActive(on){
+    const w=document.getElementById('voice-wave');
+    if(!w)return;
+    w.classList.toggle('speaking',!!on);
+    active=!!on;
+    /*
+      در حالت کاهش حرکت، هیچ حلقهٔ انیمیشنی شروع نمی‌شود — حتی اگر یک
+      قاب از قبل در صف مانده باشد، همان‌جا خالی می‌شود. نسخهٔ پیشین این
+      صف را پاک نمی‌کرد و loop() را بی‌قیدوشر صدا می‌زد، یعنی انیمیشن
+      دقیقاً در حالتی اجرا می‌شد که کاربر خواسته بود حرکت نباشد.
+    */
+    stopLoop();
+    if(reduced()){ if(on) staticOn(); else staticOff(); return }
+    if(on){t0=performance.now();loop()}
+  }
+  /* مسیر TTS: زمان‌بندی واقعی از خودِ utterance. */
+  function startSpeech(text){
+    const w=document.getElementById('voice-wave');
+    if(!bars.length)bars=collect();
+    n=bars.length;
+    mode='speech';
+    dur=Math.max(900,String(text||'').length*72);
+    syllable=(String(text||'').length%7)*0.9;
+    lastBoundary=-9999;
+    level=0;
+    if(w)w.classList.remove('live');
+    /* setActive خودش تصمیم می‌گیرد که حلقه لازم است یا حالت ایستا. */
+    setActive(true);
+  }
+  function boundary(){lastBoundary=performance.now()-t0}
+  /* مسیر زنده: AnalyserNode واقعی روی MediaStream مدل. */
+  function attachStream(stream){
+    try{
+      const AC=window.AudioContext||window.webkitAudioContext;
+      if(!AC||!stream)return false;
+      detachStream();
+      actx=new AC();
+      /*
+        گرهٔ منبع از روی stream «ورودی» ساخته می‌شود، نه خروجی. اگر stream
+        خروجی مدل را نگه داریم، getUserMedia آن را زنده نگه می‌دارد و
+        میکروفن کاربر بدون دلیل باز می‌ماند. برای تحلیلگر فقط بسامدها
+        لازم است، پس نیازی به نگه‌داشتن ارجاع نیست.
+      */
+      srcNode=actx.createMediaStreamSource(stream);
+      analyser=actx.createAnalyser();
+      analyser.fftSize=1024;
+      analyser.smoothingTimeConstant=0.72;
+      freq=new Uint8Array(analyser.frequencyBinCount);
+      srcNode.connect(analyser);
+      /* برای MediaStreamSource لازم نیست به destination وصل شود؛
+         وصل کردنش صدا را دوباره پخش می‌کند و بازخورد می‌سازد. */
+      const w=document.getElementById('voice-wave');
+      if(!bars.length)bars=collect();
+      n=bars.length;
+      mode='live';level=0;
+      if(w)w.classList.add('live');
+      active=true;
+      setActive(true);
+      return true;
+    }catch(e){return false}
+  }
+  function detachStream(){
+    stopLoop();
+    try{if(srcNode)srcNode.disconnect()}catch(e){}
+    try{if(analyser)analyser.disconnect()}catch(e){}
+    try{if(actx&&actx.state!=='closed')actx.close()}catch(e){}
+    srcNode=null;analyser=null;freq=null;actx=null;
+    const w=document.getElementById('voice-wave');
+    if(w)w.classList.remove('live');
+    mode='idle';level=0;
+  }
+  return {setActive,startSpeech,boundary,attachStream,detachStream};
+})();
+function setSpeaking(on){const w=document.getElementById('voice-wave');if(w)w.classList.toggle('speaking',!!on);VoiceWave.setActive(!!on)}function speakBack(text){
+  VoiceWave.startSpeech(text);
+  setSpeaking(true);
+  if(transcript)transcript.textContent='در حال پاسخ…';
+  if('speechSynthesis' in window){
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text);
+    u.lang='fa-IR';
+    let done=false;
+    const finish=()=>{if(done)return;done=true;setSpeaking(false);
+      if(transcript)transcript.textContent='گوش می\u200cدهم؛ درخواست بعدی شما چیست؟'};
+    u.onend=finish;
+    u.onerror=finish;
+    /* onboundary روی WebView اندروید شلیک نمی‌شود، پس اختیاری است. */
+    try{u.onboundary=()=>VoiceWave.boundary()}catch(e){}
+    speechSynthesis.speak(u);
+    /*
+      نگهبان: برخی موتورهای TTS هرگز onend را شلیک نمی‌کنند و موج تا ابد
+      روشن می‌ماند. زمان از طول واقعی متن گرفته می‌شود، نه یک عدد ثابت.
+    */
+    const guard=Math.max(2600,String(text||'').length*110)+1500;
+    setTimeout(finish,guard);
+  }else{
+    setTimeout(()=>setSpeaking(false),Math.max(1200,String(text||'').length*55));
+  }
+}const tabIds=['home','meds','vitals','wallet','settings'];let swipeX=0,swipeY=0;document.addEventListener('touchstart',e=>{swipeX=e.changedTouches[0].clientX;swipeY=e.changedTouches[0].clientY},{passive:true});document.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-swipeX,dy=e.changedTouches[0].clientY-swipeY;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.3){const current=document.querySelector('.panel.active')?.id||'home';const i=tabIds.indexOf(current);const next=dx>0?tabIds[Math.min(i+1,tabIds.length-1)]:tabIds[Math.max(i-1,0)];if(next!==current)go(next)}},{passive:true});window.addEventListener('load',()=>{if(needsServerSetup())setTimeout(openServerSetup,700);const n=localStorage.getItem('seniorName');const w=document.querySelector('.welcome');if(n&&w)w.innerHTML='سلام، <span>'+esc(n)+'</span><br>امروز حالتان چطور است؟';flushOfflineQueue();loadVoiceProfile().then(()=>{startPatienceWatchdog()}).catch(()=>{startPatienceWatchdog()});(async()=>{let ok=false;try{ok=await tryLiveVoice()}catch(e){}if(!ok){try{ok=await tryRealtimeVoice()}catch(e){}}if(!ok)startAlwaysListening()})();syncPlatform();syncMedicationList();syncCareSummary();checkMedicationReminders();checkProactivePrompts();setInterval(()=>{checkMedicationReminders();checkProactivePrompts()},60000)});if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));}
 </script>
 </body></html>

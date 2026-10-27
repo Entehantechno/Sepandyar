@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  سرور MVP روی http و پورت ۴۱۷۴ اجرا می‌شود. مانیفست
+  android:usesCleartextTraffic="false" دارد و saveServerUrl هم عمداً فقط
+  https را می‌پذیرد (تا کاربر را به سرور مهاجم برنگردانیم). نتیجه یک
+  بن‌بست بود: اپ هیچ‌گاه نمی‌توانست به سرور توسعه برسد، پس
+  /api/apps/approved خالی می‌ماند و هیچ وظیفهٔ کنترل صفحه‌ای ممکن نبود.
+
+  این پیکربندی فقط حلقهٔ محلی را باز می‌کند. دامنه‌های localhost و
+  127.0.0.1 در اندروید ۹ (API 28) به بعد از سیاست کلیدرمتنِ سراسری
+  مستثنا هستند، پس این فایل سیاست امنیتی را برای هیچ آدرس دیگری
+  شل نمی‌کند: هر میزبان دیگر همچنان https-only می‌ماند.
+
+  android:networkSecurityConfig در مانیفست اولویت بالاتری از
+  usesCleartextTraffic دارد.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

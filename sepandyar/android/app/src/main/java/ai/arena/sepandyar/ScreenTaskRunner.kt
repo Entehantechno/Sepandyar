@@ -92,11 +92,24 @@ object ScreenTaskRunner {
 
     private fun attempt(step: ScreenStep, svc: ScreenControlService, deadline: Long, tries: Int) {
         if (cancelled) return
-        svc.performStep(step)
-        val satisfied = if (step.expect.isBlank()) {
-            step.type == "wait" || step.type == "launch" || svc.isTextVisible(step.payload)
-        } else {
+        val acted = svc.performStep(step)
+        /*
+         * معیار موفقیت گام:
+         *  - اگر «expect» داده شده، همان متن مرجع نهایی است.
+         *  - در غیر این صورت نتیجهٔ واقعی performStep ملاک است.
+         *
+         * پیش‌تر نتیجهٔ performStep دور ریخته می‌شد و موفقیت فقط با
+         * isTextVisible(step.payload) سنجیده می‌شد. دو پیامد اشتباه داشت:
+         *  ۱) گام‌های scroll (پی‌لود «up»/«down») و tap_xy (پی‌لود «x,y»)
+         *     هیچ‌گاه متنِ پی‌لود را روی صفحه ندارند، پس با اینکه درست
+         *     اجرا شده بودند، ۶ بار تکرار و سپس «failed» می‌شدند.
+         *  ۲) در tap_text، تپِ موفق معمولاً صفحه را عوض می‌کند و همان متن
+         *     ناپدید می‌شود؛ پس موفقیت به‌شکل شکست گزارش می‌شد.
+         */
+        val satisfied = if (step.expect.isNotBlank()) {
             svc.isTextVisible(step.expect)
+        } else {
+            acted || step.type == "wait" || step.type == "launch"
         }
         if (satisfied) {
             index += 1

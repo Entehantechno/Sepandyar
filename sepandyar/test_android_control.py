@@ -104,6 +104,80 @@ s,j=req('/api/caregiver/panel',headers=H)
 check('با رضایت، سوابق کنترل صفحه به مراقب نشان داده می‌شود',s==200 and isinstance(j.get('screen_tasks'),list) and len(j.get('screen_tasks'))>=2 and j.get('screen_control_shared') is True,(s,type(j.get('screen_tasks'))))
 req('/api/caregiver/session/revoke','POST',headers=H)
 
+print('--- 6) کنترل دستگاه: قرارداد نوع پل + پیکربندی سرویس دسترس‌پذیری ---')
+# این بخش دقیقاً همان شکافی را می‌بندد که باعث شد یک خطای کامپایل از
+# تست‌ها رد شود: بررسی بخش ۲ فقط «نام» متدها را تطبیق می‌داد، نه امضای
+# نوعشان. ScreenTaskRunner.start پارامتر «launch: (String) -> Boolean»
+# می‌گیرد، ولی launchApprovedPackage نوع بازگشت نداشت (یعنی Unit) و
+# کاتلین Unit را به Boolean تبدیل نمی‌کند؛ پس کل MainActivity کامپایل
+# نمی‌شد و قابلیت کنترل دستگاه هرگز ساخته نمی‌شد.
+runner=open(os.path.join(KT,'ScreenTaskRunner.kt'),encoding='utf-8').read()
+
+_m=re.search(r'fun start\([^)]*launch:\s*\(String\)\s*->\s*(\w+)',runner)
+check('بخش۶ نوع پارامتر launch در ScreenTaskRunner.start تشخیص داده شد',bool(_m),runner[:120])
+LAUNCH_RET=(_m.group(1) if _m else None)
+check('بخش۶ ScreenTaskRunner.start انتظار (String) -> Boolean دارد',LAUNCH_RET=='Boolean',LAUNCH_RET)
+
+_mb=re.search(r'@JavascriptInterface fun launchApprovedPackage\([^)]*\)\s*:\s*(\w+)',main)
+check('بخش۶ launchApprovedPackage نوع بازگشت صریح دارد',bool(_mb),'امضای بدون نوع بازگشت = Unit')
+BRIDGE_RET=(_mb.group(1) if _mb else None)
+check('بخش۶ نوع بازگشت launchApprovedPackage با انتظار runner می‌خواند',
+      BRIDGE_RET==LAUNCH_RET,(BRIDGE_RET,LAUNCH_RET))
+check('بخش۶ لامبدای پاس‌داده‌شده به start همان متد Boolean است',
+      re.search(r'ScreenTaskRunner\.start\([^)]*\)\s*\{\s*pkg\s*->\s*launchApprovedPackage\(pkg\)\s*\}',main) is not None,'')
+
+# نتیجهٔ performStep باید واقعاً استفاده شود، نه دور ریخته
+_att=runner[runner.find('private fun attempt'):]
+_att=_att[:_att.find('\n    }\n')+5] if '\n    }\n' in _att else _att
+check('بخش۶ نتیجهٔ performStep در attempt استفاده می‌شود',
+      re.search(r'=\s*svc\.performStep\(step\)',_att) is not None,'نتیجه دور ریخته می‌شد')
+check('بخش۶ موفقیت گام دیگر فقط به دیده‌شدن متن پی‌لود وابسته نیست',
+      'acted' in _att and 'svc.isTextVisible(step.expect)' in _att,'')
+
+# پیکربندی سرویس دسترس‌پذیری
+_cfg=open(os.path.join(ROOT,'android','app','src','main','res','xml',
+                       'accessibility_service_config.xml'),encoding='utf-8').read()
+check('بخش۶ isAccessibilityTool="true" اعلام شده',
+      'android:isAccessibilityTool="true"' in _cfg,
+      'بدون آن، حالت Advanced Protection در اندروید ۱۷ مجوز را لغو می‌کند')
+check('بخش۶ canPerformGestures برای dispatchGesture فعال است',
+      'android:canPerformGestures="true"' in _cfg,'')
+check('بخش۶ canRetrieveWindowContent برای خواندن درخت فعال است',
+      'android:canRetrieveWindowContent="true"' in _cfg,'')
+check('بخش۶ flagIncludeNotImportantViews فعال است',
+      'flagIncludeNotImportantViews' in _cfg,
+      'بدون آن کنترل‌های many-apps دیده نمی‌شوند')
+
+# fallback ضربه با dispatchGesture
+check('بخش۶ tapOnce در صورت شکست ACTION_CLICK به dispatchGesture می‌افتد',
+      re.search(r'private fun tapOnce',svc) is not None and 'return tap(' in svc,'')
+# انتخاب فیلد ورودی با فوکوس
+check('بخش۶ smartInput اول فیلد دارای فوکوس ورودی را برمی‌دارد',
+      'FOCUS_INPUT' in svc,'بدون آن متن در فیلد اشتباه تایپ می‌شد')
+
+# مانیفست + پیکربندی شبکه
+_mf=open(os.path.join(ROOT,'android','app','src','main','AndroidManifest.xml'),encoding='utf-8').read()
+check('بخش۶ networkSecurityConfig به مانیفست وصل شده',
+      'android:networkSecurityConfig="@xml/network_security_config"' in _mf,
+      'بدون آن اپ به سرور http محلی نمی‌رسد و هیچ وظیفهٔ کنترلی ممکن نیست')
+_nsc=os.path.join(ROOT,'android','app','src','main','res','xml','network_security_config.xml')
+check('بخش۶ فایل network_security_config.xml وجود دارد',os.path.exists(_nsc),'')
+if os.path.exists(_nsc):
+    _n=open(_nsc,encoding='utf-8').read()
+    check('بخش۶ فقط حلقهٔ محلی cleartext است، نه همه‌جا',
+          'cleartextTrafficPermitted="true"' in _n and '<domain includeSubdomains="false">localhost</domain>' in _n
+          and '0.0.0.0/0' not in _n and '*.' not in _n,_n[:200])
+check('بخش۶ usesCleartextTraffic="false" دست‌نخورده باقی مانده',
+      'android:usesCleartextTraffic="false"' in _mf,'سیاست https-only عمدی است')
+check('بخش۶ POST_NOTIFICATIONS در زمان اجرا درخواست می‌شود',
+      'Manifest.permission.POST_NOTIFICATIONS' in main,'')
+# روی متنِ بدون کامنت بررسی می‌شود: کامنت توضیحیِ خودِ اصلاح، عبارت قدیمی
+# را نقل می‌کند و بررسیِ متن خام را به اشتباه قرمز می‌کرد.
+_main_code=strip_kotlin(main)
+check('بخش۶ نتیجهٔ مجوز با نام مجوز سنجیده می‌شود نه جایگاهش',
+      'permissions.indexOf(Manifest.permission.RECORD_AUDIO)' in _main_code
+      and 'grantResults.firstOrNull()' not in _main_code,'')
+
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)
 print('Stage-3 Android control test passed')

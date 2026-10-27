@@ -3,6 +3,7 @@ package ai.arena.sepandyar
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
+import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -43,15 +44,19 @@ class ScreenControlService : AccessibilityService() {
         return false
     }
 
+    /**
+     * تایپ در فیلد ورودی.
+     *
+     * اولویت با فیلدی است که «الان فوکوس ورودی دارد» — یعنی همان فیلدی که
+     * گام قبلی (tap_text) روی آن ضربه زد. findEditable روی ریشه، اولین فیلد
+     * قابل‌ویرایش را در پیمایش عمق‌اول برمی‌گرداند که در فرم‌های چندفیلدی
+     * (مثلاً جست‌وجوی مقصد در اسنپ) لزوماً همان فیلد مقصود نیست و متن در
+     * فیلد اشتباه تایپ می‌شد.
+     */
     private fun smartInput(value: String): Boolean {
-        val target = findEditable(rootInActiveWindow) ?: return false
-        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) }
-        return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-    }
-
-    private fun findAndInput(root: AccessibilityNodeInfo?, value: String): Boolean {
-        if (root == null) return false
-        val target = findEditable(root) ?: return false
+        val root = rootInActiveWindow ?: return false
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable }
+        val target = focused ?: findEditable(root) ?: return false
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) }
         return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
@@ -62,11 +67,20 @@ class ScreenControlService : AccessibilityService() {
         return null
     }
 
-    private fun tap(x: Float, y: Float) {
+    /**
+     * فرستادن یک ضربهٔ واقعی به مختصات صفحه.
+     *
+     * برگرداندن true یعنی «سیستم ضربه را پذیرفت». نتیجهٔ پایانی
+     * (onCompleted/onCancelled) در callback می‌آید و عمداً انتظارش کشیده
+     * نمی‌شود: ScreenTaskRunner گام‌ها را روی Handler نخ اصلی اجرا می‌کند،
+     * پس بلاک کردن اینجا با CountDownLatch نخ اصلی را می‌خواباند و خودِ
+     * callback هم روی همان لوپر تحویل داده می‌شود — یعنی بن‌بست.
+     */
+    private fun tap(x: Float, y: Float): Boolean = try {
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, 80)
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
-    }
+    } catch (e: Exception) { false }
 
     // ---- اجرای گام‌های برنامه کنترل صفحه (توسط ScreenTaskRunner) ----
 
@@ -100,9 +114,28 @@ class ScreenControlService : AccessibilityService() {
     }
 
     /** یک تلاش برای لمس؛ بدون زمان‌بندی داخلی تا تلاش‌های پشت‌سرهم روی هم تلنبار نشوند. */
+    /**
+     * ضربه روی عنصری که با متن/توضیحش پیدا شده.
+     *
+     * اگر ACTION_CLICK جواب نداد، به‌جای شکست، یک ضربهٔ واقعی با
+     * dispatchGesture روی مرکز کادر همان عنصر فرستاده می‌شود. این دقیقاً
+     * همان راه‌حل جایگزینی است که راهنمای رسمی سرویس دسترس‌پذیری اندروید
+     * برای سرویس‌های غیرِ صفحه‌خوان توصیه می‌کند، چون بسیاری از اپ‌ها
+     * ACTION_CLICK را درست پیاده‌سازی نکرده‌اند. بدون این fallback، چنین
+     * عناصری ۶ بار تلاش ناموفق می‌خوردند و کل وظیفه شکست می‌خورد.
+     */
     private fun tapOnce(query: String): Boolean {
         val target = SmartSelector.find(rootInActiveWindow, query) ?: return false
-        return target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        if (target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+        if (target.isClickable && target.parent?.isClickable == true &&
+            target.parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+        val rect = Rect()
+        target.getBoundsInScreen(rect)
+        if (rect.isEmpty) return false
+        val x = rect.exactCenterX()
+        val y = rect.exactCenterY()
+        if (x <= 0f || y <= 0f) return false
+        return tap(x, y)
     }
 
     private fun scrollRoot(direction: String): Boolean {
