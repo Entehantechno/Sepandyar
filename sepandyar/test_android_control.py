@@ -178,6 +178,62 @@ check('بخش۶ نتیجهٔ مجوز با نام مجوز سنجیده می‌�
       'permissions.indexOf(Manifest.permission.RECORD_AUDIO)' in _main_code
       and 'grantResults.firstOrNull()' not in _main_code,'')
 
+print('--- 7) اتصال به سرور: رفع بن‌بست http بدون شکستن سیاست https ---')
+# دو باگ اینجا قفل می‌شوند:
+#  ۱) saveServerUrl هر http را رد می‌کرد و به‌علاوه host.contains('.')
+#     الزامی بود که خودِ «localhost» را هم رد می‌کرد. سرور MVP روی
+#     http:4174 است، پس اپِ نصب‌شده هرگز نمی‌توانست به آن وصل شود و
+#     /api/apps/approved خالی می‌ماند => هیچ وظیفهٔ کنترلی ممکن نبود.
+#  ۲) setServerUrl در لایهٔ وب بدون توجه به نتیجهٔ native پیام «ذخیره شد»
+#     می‌داد؛ یعنی یک شکست بی‌صدا که کاربر نمی‌توانست عیب‌یابی کند.
+# نکته: strip_kotlin رشته‌ها را هم پاک می‌کند، پس برای سنجشِ «محتوای
+# رشته» باید از متن خام استفاده کرد؛ نسخهٔ بدون رشته باعث می‌شد جست‌وجوی
+# «http» هرگز匹配 نکند و چند بررسی به اشتباه قرمز شوند.
+_i0=main.find('fun saveServerUrl')
+assert _i0>0, 'saveServerUrl not found'
+_sv=main[_i0:_i0+1800]
+
+check('بخش۷ saveServerUrl مقدار Boolean برمی‌گرداند (تا وب بتواند رد شدن را بفهمد)',
+      re.search(r'@JavascriptInterface fun saveServerUrl\([^)]*\)\s*:\s*Boolean', main) is not None,
+      'بدون آن، لایهٔ وب نمی‌تواند شکست را به کاربر نشان دهد')
+check('بخش۷ http برای میزبان خصوصی/حلقهٔ محلی پذیرفته می‌شود',
+      'scheme == "http" && privateHost' in _sv, _sv[:200])
+check('بخش۷ localhost به‌صراحت مجاز است (بدون نیاز به نقطه در هاست)',
+      'host.equals("localhost"' in _sv, 'الزام host.contains(".") خودِ localhost را رد می‌کرد')
+check('بخش۷ الزام سراسری host.contains(".") برداشته شده',
+      'host.contains(\'.\')' not in _sv, '')
+check('بخش۷ https برای هر میزبان دیگری همچنان الزامی است (سیاست امنیتی حفظ شد)',
+      'scheme == "https"' in _sv, '')
+check('بخش۷ بازهٔ خصوصی ۱۷۲.۱۶ تا ۱۷۲.۳۱ درست محدود شده',
+      r'172\\.(1[6-9]|2[0-9]|3[01])' in _sv,
+      '۱۷۲.x.x همه خصوصی نیستند؛ فقط ۱۶ تا ۳۱')
+check('بخش۷ نشانی خالی، مقدار ذخیره‌شده را پاک می‌کند',
+      'remove("server_url")' in _sv, 'پیش‌تر نشانی بد برای همیشه می‌ماند')
+
+# پیکربندی شبکه
+_nsc2=os.path.join(ROOT,'android','app','src','main','res','xml','network_security_config.xml')
+_n2=open(_nsc2,encoding='utf-8').read()
+check('بخش۷ نام مستعار میزبانِ شبیه‌ساز (۱۰.۰.۲.۲) در پیکربندی شبکه هست',
+      '>10.0.2.2<' in _n2, 'بدون آن، شبیه‌ساز اندروید به سرور میزبان نمی‌رسد')
+check('بخش۷ پیکربندی شبکه wildcard یا بازهٔ broad ندارد',
+      '*.' not in _n2 and '0.0.0.0/0' not in _n2, '')
+check('بخش۷ شبکه به مانیفست وصل است',
+      'android:networkSecurityConfig="@xml/network_security_config"' in _mf, '')
+
+# لایهٔ وب باید رد شدن را نشان دهد
+check('بخش۷ لایهٔ وب نتیجهٔ saveServerUrl را می‌سنجد',
+      'const ok=window.SepandyarNative.saveServerUrl(v)' in web
+      and 'ok===false' in web, 'پیش‌تر شکست بی‌صدا بود')
+check('بخش۷ در صورت رد شدن، API_BASE ذخیره نمی‌شود',
+      web.find('ok===false') < web.find('localStorage.setItem(\'sepandyarServer\',v)'),
+      'ترتیب اشتباه = نشانی بد در localStorage می‌ماند')
+# متن جدید همان زیررشتهٔ قدیمی را دارد («برای اینترنت، آدرس باید با
+# https باشد؛») پس «نبودنِ» آن substring معیار درستی نیست؛ باید حضورِ
+# توضیح تازه سنجیده شود.
+check('بخش۷ راهنمای کاربر می‌گوید http برای نشانی محلی/خصوصی مجاز است',
+      'http با نشانی محلی' in web and 'localhost' in web,
+      'پیش‌تر فقط گفته می‌شد «آدرس باید با https باشد» که دیگر درست نبود')
+
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)
 print('Stage-3 Android control test passed')

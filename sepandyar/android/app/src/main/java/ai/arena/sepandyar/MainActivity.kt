@@ -109,15 +109,43 @@ class MainActivity : Activity() {
         // فقط https روی میزبان معتبر پذیرفته می‌شود. این متد ماندگار است: یک مقدار
         // بد، اپ را برای همیشه به سرور مهاجم برمی‌گرداند و چون لایهٔ وب آن را در
         // نخستین اجرا می‌خواند، هیچ بازنشانی آشکاری هم ندارد.
-        @JavascriptInterface fun saveServerUrl(url: String) {
+        /**
+         * ذخیرهٔ نشانی سرور.
+         *
+         * https برای هر میزبان عمومی الزامی می‌ماند (تصمیم امنیتی عمدی:
+         * نشانی بد، اپ را برای همیشه به سرور مهاجم برمی‌گرداند و چون لایهٔ
+         * وب آن را در نخستین اجرا می‌خواند، هیچ بازنشانی آشکاری هم ندارد).
+         *
+         * اما http برای «حلقهٔ محلی و نشانی‌های خصوصی» مجاز است. پیش‌تر این
+         * متد http را بی‌قیدوشرط رد می‌کرد و به‌علاوه host.contains('.')
+         * الزامی بود که خودِ «localhost» را هم رد می‌کرد. نتیجه یک بن‌بست
+         * بود: سرور MVP روی http و پورت ۴۱۷۴ اجرا می‌شود، پس اپِ نصب‌شده
+         * هرگز نمی‌توانست به آن وصل شود، /api/apps/approved خالی می‌ماند و
+         * هیچ وظیفهٔ کنترل صفحه‌ای ممکن نبود.
+         *
+         * نکته: اجازهٔ کلیدرمتن در سطح سیستم‌عامل با
+         * res/xml/network_security_config.xml داده می‌شود و آن فایل فقط
+         * تطبیق «دقیق» میزبان را پشتیبانی می‌کند (CIDR پشتیبانی نمی‌شود).
+         * پس برای یک IP روی شبکهٔ محلی باید همان میزبان به آن فایل اضافه
+         * شود؛ این محدودیت در README مستند شده است.
+         */
+        @JavascriptInterface fun saveServerUrl(url: String): Boolean {
             val candidate = url.trim()
-            if (candidate.isEmpty()) return
+            val editor = getSharedPreferences("assistant", MODE_PRIVATE).edit()
+            if (candidate.isEmpty()) { editor.remove("server_url").apply(); return false }
             val parsed = Uri.parse(candidate)
-            val schemeOk = parsed.scheme.equals("https", ignoreCase = true)
             val host = parsed.host
-            val hostOk = !host.isNullOrBlank() && host.contains('.') && !host.contains(' ')
-            if (!schemeOk || !hostOk) return
-            getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("server_url", candidate).apply()
+            if (host.isNullOrBlank() || host.contains(' ')) return false
+            val scheme = parsed.scheme?.lowercase()
+            val privateHost = host.equals("localhost", ignoreCase = true) ||
+                host == "::1" || host == "[::1]" ||
+                host.startsWith("127.") || host.startsWith("10.") ||
+                host.startsWith("192.168.") ||
+                Regex("^172\\.(1[6-9]|2[0-9]|3[01])\\.").containsMatchIn(host)
+            val schemeOk = scheme == "https" || (scheme == "http" && privateHost)
+            if (!schemeOk) return false
+            editor.putString("server_url", candidate).apply()
+            return true
         }
         @JavascriptInterface fun saveVoiceProfile(samples: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("voice_samples", samples).putLong("voice_enrolled_at", System.currentTimeMillis()).apply() }
         @JavascriptInterface fun callCaregiver(phone: String) { if (phone.isNotBlank()) startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))) }

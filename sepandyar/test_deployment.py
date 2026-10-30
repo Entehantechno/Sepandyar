@@ -77,8 +77,15 @@ check('ناوبری به مبدأ غیر appassets بسته می‌شود',
       'WebViewAssetLoader.DEFAULT_DOMAIN' in main_kt and 'return !sameOrigin' in main_kt)
 check('tel: به dialer سیستم سپرده می‌شود نه WebView',
       'Intent.ACTION_DIAL' in main_kt)
-check('saveServerUrl فقط https با میزبان معتبر می‌پذیرد',
-      'saveServerUrl' in main_kt and 'schemeOk' in main_kt and 'hostOk' in main_kt)
+# نیت این بررسی «saveServerUrl اعتبارسنجی می‌کند» است، نه وجود نام‌های
+# متغیر particular. پیش‌تر به 'hostOk' چسبیده بود که در بازنویسی حذف شد.
+# سیاست امنیتی اصلی حفظ شده: https برای هر میزبان غیرخصوصی الزامی است؛
+# http فقط برای حلقهٔ محلی/خصوصی (تا اپ بتواند به سرور MVP روی
+# http:4174 برسد — بن‌بستی که در مرحلهٔ ۱۹ رفع شد).
+check('saveServerUrl اعتبارسنجی طرح و میزبان دارد',
+      'saveServerUrl' in main_kt and 'schemeOk' in main_kt and 'privateHost' in main_kt)
+check('https برای میزبان غیرخصوصی همچنان الزامی است',
+      'scheme == "https"' in main_kt and 'scheme == "http" && privateHost' in main_kt)
 check('saveServerUrl مقدار خام را بی‌اعتبارسنجی ذخیره نمی‌کند',
       "putString(\"server_url\", url.trim()).apply()" not in main_kt)
 

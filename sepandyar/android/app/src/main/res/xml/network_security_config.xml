@@ -1,22 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  سرور MVP روی http و پورت ۴۱۷۴ اجرا می‌شود. مانیفست
-  android:usesCleartextTraffic="false" دارد و saveServerUrl هم عمداً فقط
-  https را می‌پذیرد (تا کاربر را به سرور مهاجم برنگردانیم). نتیجه یک
-  بن‌بست بود: اپ هیچ‌گاه نمی‌توانست به سرور توسعه برسد، پس
-  /api/apps/approved خالی می‌ماند و هیچ وظیفهٔ کنترل صفحه‌ای ممکن نبود.
+  سرور MVP روی http و پورت ۴۱۷۴ اجرا می‌شود. این پیکربندی کلیدرمتن را
+  «فقط» برای میزبان‌های محلی مجاز می‌کند تا اپ بتواند به سرور توسعه
+  برسد؛ هر میزبان عمومی همچنان https-only می‌ماند.
 
-  این پیکربندی فقط حلقهٔ محلی را باز می‌کند. دامنه‌های localhost و
-  127.0.0.1 در اندروید ۹ (API 28) به بعد از سیاست کلیدرمتنِ سراسری
-  مستثنا هستند، پس این فایل سیاست امنیتی را برای هیچ آدرس دیگری
-  شل نمی‌کند: هر میزبان دیگر همچنان https-only می‌ماند.
+  سه نکتهٔ مستند (پژوهش مرحلهٔ ۱۹):
 
-  android:networkSecurityConfig در مانیفست اولویت بالاتری از
-  usesCleartextTraffic دارد.
+  ۱) وقتی android:networkSecurityConfig در مانیفست تنظیم شده باشد،
+     android:usesCleartextTraffic «نادیده گرفته می‌شود» (نه اینکه صرفاً
+     اولویت پایین‌تری داشته باشد). آن صفت در مانیفست نگه داشته شده تا
+     اگر روزی این فایل حذف شد، رفتار امن پیش‌فرض برقرار بماند.
+
+  ۲) قالب این فایل فقط تطبیق «دقیق» میزبان را پشتیبانی می‌کند؛
+     CIDR/بازهٔ IP پشتیبانی نمی‌شود. پس نمی‌توان «همهٔ ۱۹۲.۱۶۸.*» را
+     مجاز کرد. برای آزمایش روی گوشی واقعی که به سروری روی شبکهٔ محلی
+     وصل است، باید همان IP دقیق به عنوان یک <domain> اضافه شود:
+         <domain includeSubdomains="false">192.168.1.20</domain>
+     بدون آن، لایهٔ وب نشانی را ذخیره می‌کند ولی اتصال در سطح
+     سیستم‌عامل با خطای ERR_CLEARTEXT_NOT_PERMITTED رد می‌شود.
+
+  ۳) ۱۰.۰.۲.۲ نام مستعار میزبانِ شبیه‌ساز اندروید است و برای
+     «adb reverse» همین ۱۲۷.۰.۰.۱ کافی است.
 -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">localhost</domain>
         <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">::1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
     </domain-config>
 </network-security-config>

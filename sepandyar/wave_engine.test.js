@@ -199,7 +199,62 @@ w.speakBack('آزمایش خطا');
 spoken.onerror();
 check('با onerror موج خاموش شد', !waveEl.classList.contains('speaking'));
 
-console.log('--- ۶) همسان بودن دارایی اندروید ---');
+console.log('--- ۶) باگ نسلِ گفتار: قطع پاسخ قبلی نباید موج پاسخ جاری را خاموش کند ---');
+/*
+  باگ واقعی که اینجا قفل می‌شود: speechSynthesis.cancel() رویداد onend
+  گفتار قبلی را شلیک می‌کند و finish قدیمی setSpeaking(false) را اجرا
+  می‌کرد. چون cancel بعد از setSpeaking(true) صدا زده می‌شد، هر بار پاسخ
+  جدیدی پاسخ قبلی را قطع می‌کرد، موج برای کل پاسخ جدید خاموش می‌ماند.
+*/
+{
+  let spoken2 = null; const queue = [];
+  w.speechSynthesis = {
+    get speaking(){ return queue.length > 0; },
+    get pending(){ return false; },
+    /*
+      slice() ضروری است: «const q = queue» فقط یک ارجاع است، پس
+      «queue.length = 0» همان آرایه را خالی می‌کرد و forEach روی آرایهٔ
+      خالی اجرا می‌شد — یعنی onend هرگز شلیک نمی‌شد و آزمونِ همین باگ
+      تهی می‌ماند. با آزمون تهی‌نبودن کشف شد.
+    */
+    cancel(){ const q = queue.slice(); queue.length = 0; q.forEach(u => { if (u.onend) u.onend(); }); },
+    speak(u){ spoken2 = u; queue.push(u); }
+  };
+  const timers2 = [];
+  w.setTimeout = (fn, ms) => { timers2.push({ fn, at: clock + (ms || 0) }); return timers2.length; };
+  w.clearTimeout = (id) => { if (timers2[id - 1]) timers2[id - 1].done = true; };
+  function advance2(ms) {
+    const target = clock + ms;
+    for (;;) {
+      const n = timers2.filter(t => !t.done && t.at <= target).sort((a, b) => a.at - b.at)[0];
+      if (!n) break;
+      clock = n.at; n.done = true; n.fn();
+    }
+    clock = Math.max(clock, target);
+  }
+  w.speakBack('باشه');
+  check('پاسخ ۱ موج را روشن کرد', waveEl.classList.contains('speaking'));
+  clock += 500;
+  w.speakBack('این یک پاسخ بلند است که باید چندین ثانیه طول بکشد تا خوانده شود و تازه بعد از آن تمام شود');
+  check('رفع باگ: پس از قطع پاسخ قبلی، موج پاسخ جدید روشن می‌ماند',
+    waveEl.classList.contains('speaking'));
+  advance2(2650);
+  check('نگهبانِ منسوخِ پاسخ ۱ موج پاسخ جاری را خاموش نمی‌کند',
+    waveEl.classList.contains('speaking'));
+  spoken2.onend();
+  check('پایان واقعی، موج را خاموش می‌کند', !waveEl.classList.contains('speaking'));
+
+  clock += 5000;
+  w.speakBack('پاسخ سوم');
+  clock += 200;
+  w.speakBack('پاسخ چهارم');
+  check('onend منسوخ، متن وضعیت را بازنشانی نمی‌کند',
+    /در حال پاسخ/.test(tr.textContent), tr.textContent);
+  advance2(300000);
+  check('نگهبانِ پاسخ جاری در نهایت موج را خاموش می‌کند', !waveEl.classList.contains('speaking'));
+}
+
+console.log('--- ۷) همسان بودن دارایی اندروید ---');
 const asset = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'assets', 'index.html'), 'utf8');
 check('android/app/src/main/assets/index.html با index.html بایت‌به‌بایت یکسان است', asset === html);
 

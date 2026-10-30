@@ -97,8 +97,27 @@ function resolveApiBase(){
 }
 let API_BASE=resolveApiBase();
 function needsServerSetup(){return IS_PACKAGED&&!API_BASE}
-function setServerUrl(u){const v=(u||'').trim().replace(/\/+$/,'');API_BASE=v;if(v)localStorage.setItem('sepandyarServer',v);else localStorage.removeItem('sepandyarServer');if(window.SepandyarNative&&window.SepandyarNative.saveServerUrl)window.SepandyarNative.saveServerUrl(v);toast(v?'آدرس سرور ذخیره شد':'آدرس سرور پاک شد')}
-function openServerSetup(){document.getElementById('modal-content').innerHTML='<h2>اتصال به سرور سپندیار</h2><p>این نسخه روی گوشی نصب می‌شود ولی داده‌ها از سرور شما می‌آید. آدرس کامل سرور را وارد کنید.</p><label class="name-label">آدرس سرور</label><input id="server-url" class="name-input full" inputmode="url" placeholder="https://sepandyar.example.com" value="'+(API_BASE||'')+'"/><div class="safety">آدرس باید با https باشد؛ میکروفون و گفت‌وگوی زنده فقط روی اتصال امن کار می‌کنند.</div><div class="modal-actions"><button class="secondary" onclick="closeModal()">بعداً</button><button class="primary" onclick="setServerUrl(document.getElementById(\'server-url\').value);closeModal();syncPlatform()">ذخیره</button></div>';document.getElementById('modal').classList.add('open')}
+function setServerUrl(u){
+ const v=(u||'').trim().replace(/\/+$/,'');
+ /*
+   نتیجهٔ لایهٔ native دیگر نادیده گرفته نمی‌شود. پیش‌تر بدون توجه به
+   پذیرفته‌شدن نشانی، پیام «ذخیره شد» نشان داده می‌شد؛ پس اگر native
+   نشانی را رد می‌کرد، کاربر فکر می‌کرد ذخیره شده ولی در اجرای بعدی
+   getServerUrl() خالی بود و اپ دوباره همان سؤال را می‌پرسید — یک
+   شکست بی‌صدا که عیب‌یابی‌اش برای کاربر ناممکن بود.
+ */
+ if(window.SepandyarNative&&window.SepandyarNative.saveServerUrl){
+  const ok=window.SepandyarNative.saveServerUrl(v);
+  if(v&&ok===false){
+   toast('این آدرس پذیرفته نشد؛ برای اتصال امن https لازم است (http فقط برای نشانی محلی/خصوصی)');
+   return;
+  }
+ }
+ API_BASE=v;
+ if(v)localStorage.setItem('sepandyarServer',v);else localStorage.removeItem('sepandyarServer');
+ toast(v?'آدرس سرور ذخیره شد':'آدرس سرور پاک شد');
+}
+function openServerSetup(){document.getElementById('modal-content').innerHTML='<h2>اتصال به سرور سپندیار</h2><p>این نسخه روی گوشی نصب می‌شود ولی داده‌ها از سرور شما می‌آید. آدرس کامل سرور را وارد کنید.</p><label class="name-label">آدرس سرور</label><input id="server-url" class="name-input full" inputmode="url" placeholder="https://sepandyar.example.com" value="'+(API_BASE||'')+'"/><div class="safety">برای اینترنت، آدرس باید با https باشد؛ میکروفون و گفت‌وگوی زنده فقط روی اتصال امن کار می‌کنند. برای آزمایش روی شبکهٔ داخلی، http با نشانی محلی یا خصوصی (مثل localhost یا 192.168.x.x) پذیرفته می‌شود.</div><div class="modal-actions"><button class="secondary" onclick="closeModal()">بعداً</button><button class="primary" onclick="setServerUrl(document.getElementById(\'server-url\').value);closeModal();syncPlatform()">ذخیره</button></div>';document.getElementById('modal').classList.add('open')}
 const OFFLINE_QUEUE='sepandyarOfflineQueue';// رمزگذاری خروجی: دادهٔ سرور می‌تواند از هر کاربر دیگری بیاید و این صفحه در WebView
 // با پل SepandyarNative اجرا می‌شود، پس XSS اینجا به قابلیت‌های بومی هم می‌رسد
 function esc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
@@ -437,31 +456,71 @@ const VoiceWave=(function(){
   }
   return {setActive,startSpeech,boundary,attachStream,detachStream};
 })();
-function setSpeaking(on){const w=document.getElementById('voice-wave');if(w)w.classList.toggle('speaking',!!on);VoiceWave.setActive(!!on)}function speakBack(text){
+function setSpeaking(on){const w=document.getElementById('voice-wave');if(w)w.classList.toggle('speaking',!!on);VoiceWave.setActive(!!on)}/*
+  شمارهٔ نسلِ گفتار. هر پاسخ جدید آن را یکی زیاد می‌کند تا هندلرهای
+  پاسخ قبلی (onend/onerror/تایمر نگهبان) بفهمند منسوخ شده‌اند و دیگر
+  به وضعیت موجِ پاسخ جاری دست نزنند.
+
+  بدون این، یک باگ جدی وجود داشت: speechSynthesis.cancel() رویداد onend
+  گفتار قبلی را شلیک می‌کند و finish قدیمی setSpeaking(false) را اجرا
+  می‌کرد. چون cancel بعد از setSpeaking(true) صدا زده می‌شد، نتیجه این
+  بود که هر بار پاسخ جدیدی پاسخ قبلی را قطع کند، موج برای کل پاسخ جدید
+  خاموش بماند — و سپندیار در هر پاسخ cancel می‌کند، پس این مسیر رایج است.
+*/
+/*
+  var و نه let: speakBack یک function declaration است و بالا برده می‌شود،
+  ولی let در «ناحیهٔ مرگ موقتی» می‌ماند تا خط اعلانش اجرا شود. ده‌ها نقطه
+  در این فایل speakBack را صدا می‌زنند؛ اگر روزی یکی از آن‌ها پیش از رسیدن
+  به این خط اجرا شود، به‌جای رفتار صحیح با ReferenceError می‌ترکد. var
+  همان الگوی بقیهٔ این فایل است و این خطر را حذف می‌کند.
+*/
+var speakGen=0;
+var speakGuardTimer=null;
+function speakBack(text){
+  const gen=++speakGen;
   VoiceWave.startSpeech(text);
+  const hasTTS=('speechSynthesis' in window);
+  /*
+    cancel پیش از روشن کردن موج، و فقط وقتی چیزی واقعاً در حال پخش است.
+    صدا زدن بی‌قیدوشرط cancel بلافاصله پیش از speak در کروم می‌تواند
+    گفتار بعدی را دور بیندازد.
+  */
+  if(hasTTS&&(speechSynthesis.speaking||speechSynthesis.pending)){
+    try{speechSynthesis.cancel()}catch(e){}
+  }
   setSpeaking(true);
   if(transcript)transcript.textContent='در حال پاسخ…';
-  if('speechSynthesis' in window){
-    speechSynthesis.cancel();
-    const u=new SpeechSynthesisUtterance(text);
-    u.lang='fa-IR';
-    let done=false;
-    const finish=()=>{if(done)return;done=true;setSpeaking(false);
-      if(transcript)transcript.textContent='گوش می\u200cدهم؛ درخواست بعدی شما چیست؟'};
-    u.onend=finish;
-    u.onerror=finish;
-    /* onboundary روی WebView اندروید شلیک نمی‌شود، پس اختیاری است. */
-    try{u.onboundary=()=>VoiceWave.boundary()}catch(e){}
-    speechSynthesis.speak(u);
-    /*
-      نگهبان: برخی موتورهای TTS هرگز onend را شلیک نمی‌کنند و موج تا ابد
-      روشن می‌ماند. زمان از طول واقعی متن گرفته می‌شود، نه یک عدد ثابت.
-    */
-    const guard=Math.max(2600,String(text||'').length*110)+1500;
-    setTimeout(finish,guard);
-  }else{
-    setTimeout(()=>setSpeaking(false),Math.max(1200,String(text||'').length*55));
+  if(!hasTTS){
+    if(speakGuardTimer)clearTimeout(speakGuardTimer);
+    speakGuardTimer=setTimeout(()=>{if(gen===speakGen)setSpeaking(false)},
+      Math.max(1200,String(text||'').length*55));
+    return;
   }
-}const tabIds=['home','meds','vitals','wallet','settings'];let swipeX=0,swipeY=0;document.addEventListener('touchstart',e=>{swipeX=e.changedTouches[0].clientX;swipeY=e.changedTouches[0].clientY},{passive:true});document.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-swipeX,dy=e.changedTouches[0].clientY-swipeY;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.3){const current=document.querySelector('.panel.active')?.id||'home';const i=tabIds.indexOf(current);const next=dx>0?tabIds[Math.min(i+1,tabIds.length-1)]:tabIds[Math.max(i-1,0)];if(next!==current)go(next)}},{passive:true});window.addEventListener('load',()=>{if(needsServerSetup())setTimeout(openServerSetup,700);const n=localStorage.getItem('seniorName');const w=document.querySelector('.welcome');if(n&&w)w.innerHTML='سلام، <span>'+esc(n)+'</span><br>امروز حالتان چطور است؟';flushOfflineQueue();loadVoiceProfile().then(()=>{startPatienceWatchdog()}).catch(()=>{startPatienceWatchdog()});(async()=>{let ok=false;try{ok=await tryLiveVoice()}catch(e){}if(!ok){try{ok=await tryRealtimeVoice()}catch(e){}}if(!ok)startAlwaysListening()})();syncPlatform();syncMedicationList();syncCareSummary();checkMedicationReminders();checkProactivePrompts();setInterval(()=>{checkMedicationReminders();checkProactivePrompts()},60000)});if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));}
+  const u=new SpeechSynthesisUtterance(text);
+  u.lang='fa-IR';
+  let done=false;
+  const finish=()=>{
+    if(done)return;
+    /* پاسخ منسوخ شده: به موجِ پاسخ جاری دست نزن. */
+    if(gen!==speakGen)return;
+    done=true;
+    setSpeaking(false);
+    if(transcript)transcript.textContent='گوش می\u200cدهم؛ درخواست بعدی شما چیست؟';
+  };
+  u.onend=finish;
+  u.onerror=finish;
+  /* onboundary روی WebView اندروید شلیک نمی‌شود، پس اختیاری است. */
+  try{u.onboundary=()=>{if(gen===speakGen)VoiceWave.boundary()}}catch(e){}
+  speechSynthesis.speak(u);
+  /*
+    نگهبان: برخی موتورهای TTS هرگز onend را شلیک نمی‌کنند و موج تا ابد
+    روشن می‌ماند. زمان از طول واقعی متن گرفته می‌شود، نه یک عدد ثابت.
+    تایمر قبلی هم پاک می‌شود تا نگهبانِ پاسخ گذشته روی پاسخ جاری اثر
+    نگذارد.
+  */
+  if(speakGuardTimer)clearTimeout(speakGuardTimer);
+  speakGuardTimer=setTimeout(finish,Math.max(2600,String(text||'').length*110)+1500);
+}
+const tabIds=['home','meds','vitals','wallet','settings'];let swipeX=0,swipeY=0;document.addEventListener('touchstart',e=>{swipeX=e.changedTouches[0].clientX;swipeY=e.changedTouches[0].clientY},{passive:true});document.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-swipeX,dy=e.changedTouches[0].clientY-swipeY;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.3){const current=document.querySelector('.panel.active')?.id||'home';const i=tabIds.indexOf(current);const next=dx>0?tabIds[Math.min(i+1,tabIds.length-1)]:tabIds[Math.max(i-1,0)];if(next!==current)go(next)}},{passive:true});window.addEventListener('load',()=>{if(needsServerSetup())setTimeout(openServerSetup,700);const n=localStorage.getItem('seniorName');const w=document.querySelector('.welcome');if(n&&w)w.innerHTML='سلام، <span>'+esc(n)+'</span><br>امروز حالتان چطور است؟';flushOfflineQueue();loadVoiceProfile().then(()=>{startPatienceWatchdog()}).catch(()=>{startPatienceWatchdog()});(async()=>{let ok=false;try{ok=await tryLiveVoice()}catch(e){}if(!ok){try{ok=await tryRealtimeVoice()}catch(e){}}if(!ok)startAlwaysListening()})();syncPlatform();syncMedicationList();syncCareSummary();checkMedicationReminders();checkProactivePrompts();setInterval(()=>{checkMedicationReminders();checkProactivePrompts()},60000)});if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));}
 </script>
 </body></html>
