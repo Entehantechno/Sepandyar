@@ -234,6 +234,63 @@ check('بخش۷ راهنمای کاربر می‌گوید http برای نشان
       'http با نشانی محلی' in web and 'localhost' in web,
       'پیش‌تر فقط گفته می‌شد «آدرس باید با https باشد» که دیگر درست نبود')
 
+print('--- 8) گارد مبدأ پل + نمادهای بدون import (جایگزین کامپایلر) ---')
+# چون در این محیط نه JVM هست نه Android SDK، هیچ‌کدام از فایل‌های Kotlin
+# کامپایل نمی‌شوند. این دو گارد جبران می‌کنند:
+#  ۱) هر نماد Foo.BAR باید import داشته باشد یا در همان پکیج باشد. این
+#     دقیقاً همان کلاسی از خطاست که پیش‌تر رخ داد (launchApprovedPackage
+#     با نوع بازگشت Unit) و چون فقط «نام» متدها تطبیق داده می‌شد، از
+#     تست‌ها رد می‌شد. یک نمونهٔ واقعی هم در مرحلهٔ ۲۰ رخ داد:
+#     WebSettings استفاده شد ولی import نداشت.
+#  ۲) پل بومی باید در «زمان فراخوانی» مبدأ را بسنجد.
+_KT_BUILTIN={'Int','String','Boolean','Long','Float','Double','Any','Unit','List','Map','Set',
+ 'MutableList','MutableMap','MutableSet','Array','IntArray','Pair','Triple','Result','CharSequence',
+ 'Throwable','Exception','NumberFormatException','IllegalArgumentException','IllegalStateException'}
+_pkg_syms=set()
+_kt_files=sorted(fn for fn in os.listdir(KT) if fn.endswith('.kt'))
+for fn in _kt_files:
+    _src=open(os.path.join(KT,fn),encoding='utf-8').read()
+    _pkg_syms|=set(re.findall(r'\b(?:class|object|interface|enum class|data class|sealed class|fun)\s+(\w+)',_src))
+_unresolved=[]
+for fn in _kt_files:
+    _c=open(os.path.join(KT,fn),encoding='utf-8').read()
+    _c=re.sub(r'/\*.*?\*/','',_c,flags=re.S); _c=re.sub(r'//.*','',_c)
+    _c=re.sub(r'"(?:\\.|[^"\\])*"','""',_c)
+    _imp={i.split('.').pop().strip() for i in re.findall(r'^import\s+([\w.]+)',_c,re.M)}
+    # (?<![\w.]) تا نمادِ وسطِ یک مسیرِ کاملاً واجد (مثل android.graphics.Typeface)
+    # به اشتباه گزارش نشود — بدون آن سه مثبت کاذب داشتیم.
+    for _m in re.finditer(r'(?<![\w.])([A-Z]\w+)\s*\.\s*[A-Za-z_]',_c):
+        _s=_m.group(1)
+        if _s in _KT_BUILTIN or _s in _imp or _s in _pkg_syms or _s.isupper(): continue
+        if (fn,_s) not in [(a,b) for a,b,_ in _unresolved]: _unresolved.append((fn,_s,_m.group(0)[:40]))
+check('بخش۸ هیچ نماد Kotlin بدون import استفاده نشده (خطای کامپایل)',
+      not _unresolved, _unresolved[:6])
+check('بخش۸ WebSettings برای mixedContentMode import شده',
+      'import android.webkit.WebSettings' in main, '')
+
+# گارد مبدأ در زمان فراخوانی
+check('بخش۸ پرچم @Volatile برای اعتماد مبدأ تعریف شده',
+      '@Volatile private var bridgeTrusted' in main, '')
+check('بخش۸ پرچم روی نخ UI از onPageStarted به‌روز می‌شود',
+      'override fun onPageStarted' in main and 'updateBridgeTrust(url)' in main, '')
+check('بخش۸ پرچم در doUpdateVisitedHistory هم به‌روز می‌شود (تغییر مسیر/بازگشت)',
+      'override fun doUpdateVisitedHistory' in main, '')
+_SENSITIVE=['saveServerUrl','runScreenTask','tvCommand','launchApprovedPackage',
+            'callCaregiver','saveVoiceProfile','setAssistantName','cancelScreenTask','bringAppToFront']
+_noguard=[]
+for _fn in _SENSITIVE:
+    _i=main.find('fun %s('%_fn)
+    if _i<0: _noguard.append((_fn,'NOT FOUND')); continue
+    _body=main[_i:_i+400]
+    if 'bridgeTrusted' not in _body: _noguard.append((_fn,'no guard'))
+check('بخش۸ همهٔ متدهای حساس پل در زمان فراخوانی مبدأ را می‌سنجند',
+      not _noguard, _noguard)
+check('بخش۸ web.url مستقیماً از نخ پل خوانده نمی‌شود (باید روی نخ UI باشد)',
+      'web.url' not in main or 'runOnUiThread' in main, '')
+check('بخش۸ mixedContentMode صریحاً NEVER_ALLOW است',
+      'mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW' in main,
+      'صفحه https است؛ http غیر-loopback به‌عنوان محتوای مختلط مسدود می‌شود')
+
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)
 print('Stage-3 Android control test passed')

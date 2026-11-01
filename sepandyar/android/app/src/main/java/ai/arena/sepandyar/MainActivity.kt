@@ -11,6 +11,7 @@ import android.net.Uri
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
@@ -18,6 +19,37 @@ import androidx.webkit.WebViewClientCompat
 class MainActivity : Activity() {
     private lateinit var web: WebView
     override fun onResume() { super.onResume(); if (::web.isInitialized && !isAccessibilityEnabled()) web.postDelayed({ web.evaluateJavascript("toast('برای راه‌اندازی کامل، دسترسی کنترل صفحه را فعال کنید')", null) }, 500) }
+    /*
+      گارد مبدأ برای پل بومی.
+
+      addJavascriptInterface روی خودِ WebView ثبت می‌شود و با هر ناوبری باقی
+      می‌ماند؛ پس اگر قاب اصلی به مبدأ بیگانه برود، آن مبدأ به همهٔ متدهای
+      AppBridge دسترسی می‌گیرد (saveServerUrl که ماندگار است و runScreenTask
+      که کنترل صفحه را در دست می‌گیرد).
+
+      shouldOverrideUrlLoading به‌تنهایی کافی نیست: فقط ناوبری قاب اصلی را
+      می‌گیرد و صفحهٔ خطا، popup یا تغییر مسیر را پوشش نمی‌دهد. پس وضعیت
+      مبدأ روی نخ UI نگه داشته می‌شود و «در زمان هر فراخوانی» خوانده
+      می‌شود.
+
+      web.url مستقیماً از نخ پل خوانده نمی‌شود چون متدهای WebView باید روی
+      نخ UI صدا زده شوند؛ به‌جایش یک پرچم @Volatile روی نخ UI به‌روز
+      می‌شود.
+
+      shortcut: این گارد مبدأ «قاب اصلی» را می‌سنجد، نه مبدأ قابِ فراخوان.
+      برای تفکیک قاب‌ها باید به WebViewCompat.addWebMessageListener با
+      allowedOriginRules مهاجرت شود که تزریق را به مبدأ مجاز محدود می‌کند؛
+      آن بازنویسی چون در این محیط کامپایل نمی‌شود انجام نشد.
+    */
+    @Volatile private var bridgeTrusted = false
+
+    private fun updateBridgeTrust(url: String?) {
+        bridgeTrusted = url?.let {
+            val u = Uri.parse(it)
+            u.scheme.equals("https", ignoreCase = true) && u.host == WebViewAssetLoader.DEFAULT_DOMAIN
+        } ?: false
+    }
+
     private fun isAccessibilityEnabled(): Boolean { val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false; return enabled.contains(packageName) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -36,6 +68,17 @@ class MainActivity : Activity() {
             settings.allowContentAccess = false
             settings.allowFileAccessFromFileURLs = false
             settings.allowUniversalAccessFromFileURLs = false
+            /*
+              صریح NEVER_ALLOW. این پیش‌فرضِ targetSdk≥21 است، ولی صریح
+              نوشتنش از تغییر اتفاقی در آینده جلوگیری می‌کند و نیت را مستند
+              می‌کند. پیامد عملی‌اش مهم است: صفحه روی https بارگذاری می‌شود،
+              پس هر fetch به http یک میزبان «غیر loopback» به‌عنوان محتوای
+              مختلط مسدود می‌شود — حتی اگر network_security_config کلیدرمتن
+              را در سطح سیستم‌عامل مجاز کرده باشد. تنها مسیر http پشتیبانی‌شده
+              حلقهٔ محلی است (127.0.0.1/::1 که طبق Secure Contexts
+              «Potentially Trustworthy» هستند)، یعنی adb reverse یا شبیه‌ساز.
+            */
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             webViewClient = object : WebViewClientCompat() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                     assetLoader.shouldInterceptRequest(request.url)
@@ -47,6 +90,12 @@ class MainActivity : Activity() {
                 // دارایی‌های خودِ اپ مجاز است.
                 // توجه: این فقط ناوبری قاب اصلی را می‌گیرد؛ زیرمنابع مانند
                 // <link> فونت از shouldInterceptRequest می‌گذرند و دست‌نخورده می‌مانند.
+                override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                    updateBridgeTrust(url)
+                }
+                override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                    updateBridgeTrust(url)
+                }
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val url = request.url ?: return true
                     if (url.scheme.equals("tel", ignoreCase = true)) {
@@ -103,7 +152,7 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
         @JavascriptInterface fun openAppSettings() { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
-        @JavascriptInterface fun setAssistantName(name: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("name", name).apply() }
+        @JavascriptInterface fun setAssistantName(name: String) { if (!bridgeTrusted) return; getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("name", name).apply() }
         // آدرس سرور سپندیار؛ لایه وب در نخستین اجرا آن را می‌خواند و در localStorage هم نگه می‌دارد
         @JavascriptInterface fun getServerUrl(): String = getSharedPreferences("assistant", MODE_PRIVATE).getString("server_url", "") ?: ""
         // فقط https روی میزبان معتبر پذیرفته می‌شود. این متد ماندگار است: یک مقدار
@@ -130,6 +179,7 @@ class MainActivity : Activity() {
          * شود؛ این محدودیت در README مستند شده است.
          */
         @JavascriptInterface fun saveServerUrl(url: String): Boolean {
+            if (!bridgeTrusted) return false
             val candidate = url.trim()
             val editor = getSharedPreferences("assistant", MODE_PRIVATE).edit()
             if (candidate.isEmpty()) { editor.remove("server_url").apply(); return false }
@@ -147,9 +197,9 @@ class MainActivity : Activity() {
             editor.putString("server_url", candidate).apply()
             return true
         }
-        @JavascriptInterface fun saveVoiceProfile(samples: String) { getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("voice_samples", samples).putLong("voice_enrolled_at", System.currentTimeMillis()).apply() }
-        @JavascriptInterface fun callCaregiver(phone: String) { if (phone.isNotBlank()) startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))) }
-        @JavascriptInterface fun tvCommand(command: String): Boolean { return TvCommandRouter.execute(this@MainActivity, command) }
+        @JavascriptInterface fun saveVoiceProfile(samples: String) { if (!bridgeTrusted) return; getSharedPreferences("assistant", MODE_PRIVATE).edit().putString("voice_samples", samples).putLong("voice_enrolled_at", System.currentTimeMillis()).apply() }
+        @JavascriptInterface fun callCaregiver(phone: String) { if (!bridgeTrusted) return; if (phone.isNotBlank()) startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))) }
+        @JavascriptInterface fun tvCommand(command: String): Boolean { if (!bridgeTrusted) return false; return TvCommandRouter.execute(this@MainActivity, command) }
         /**
          * باز کردن یک اپ تأییدشده.
          *
@@ -163,6 +213,7 @@ class MainActivity : Activity() {
          * حالا لایهٔ وب هم می‌تواند بفهمد اپ واقعاً باز شد یا نه.
          */
         @JavascriptInterface fun launchApprovedPackage(packageName: String): Boolean {
+            if (!bridgeTrusted) return false
             if (!ApprovedApps.contains(packageName)) return false
             val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return false
             return try { startActivity(intent); true } catch (e: Exception) { false }
@@ -175,10 +226,12 @@ class MainActivity : Activity() {
         @JavascriptInterface fun openOverlaySettings() { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }
         @JavascriptInterface fun accessibilityEnabled(): Boolean = isAccessibilityEnabled()
         /** اجرای کامل یک کار روی اپ تأییدشده، با پاپ‌آپ شناور و بازگشت خودکار به سپندیار. */
-        @JavascriptInterface fun runScreenTask(planJson: String): Boolean =
-            ScreenTaskRunner.start(this@MainActivity, planJson) { pkg -> launchApprovedPackage(pkg) }
-        @JavascriptInterface fun cancelScreenTask() { ScreenTaskRunner.cancel() }
-        @JavascriptInterface fun bringAppToFront() { runOnUiThread { returnFromOverlay() } }
+        @JavascriptInterface fun runScreenTask(planJson: String): Boolean {
+            if (!bridgeTrusted) return false
+            return ScreenTaskRunner.start(this@MainActivity, planJson) { pkg -> launchApprovedPackage(pkg) }
+        }
+        @JavascriptInterface fun cancelScreenTask() { if (!bridgeTrusted) return; ScreenTaskRunner.cancel() }
+        @JavascriptInterface fun bringAppToFront() { if (!bridgeTrusted) return; runOnUiThread { returnFromOverlay() } }
     }
 
     /** نتیجه کار را به جاوااسکریپت داخل WebView برمی‌گرداند. */
