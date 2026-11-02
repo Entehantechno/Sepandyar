@@ -231,6 +231,45 @@ class MainActivity : Activity() {
             return ScreenTaskRunner.start(this@MainActivity, planJson) { pkg -> launchApprovedPackage(pkg) }
         }
         @JavascriptInterface fun cancelScreenTask() { if (!bridgeTrusted) return; ScreenTaskRunner.cancel() }
+
+        // ---- مرحلهٔ ۲۳: خواندن صفحه و اعلان‌ها ----
+        // همهٔ این‌ها گارد مبدأ را در زمان فراخوانی می‌سنجند؛ addJavascriptInterface
+        // با هر ناوبری باقی می‌ماند و shouldOverrideUrlLoading به‌تنهایی کافی نیست.
+        // همه try/catch دارند چون از نخ پل صدا زده می‌شوند و یک استثنای
+        // نگرفته، WebView را در وضعیت نامشخص رها می‌کند.
+        @JavascriptInterface fun readScreenText(): String {
+            if (!bridgeTrusted) return ""
+            return try { ScreenControlService.instance?.readScreenText() ?: "" } catch (e: Exception) { "" }
+        }
+        @JavascriptInterface fun notificationsAllowed(): Boolean =
+            NotificationService.allowed(this@MainActivity)
+        @JavascriptInterface fun setNotificationsAllowed(on: Boolean) {
+            if (!bridgeTrusted) return
+            getSharedPreferences("assistant", MODE_PRIVATE).edit()
+                .putBoolean(NotificationService.PREF_KEY, on).apply()
+        }
+        @JavascriptInterface fun openNotificationSettings() {
+            if (!bridgeTrusted) return
+            try {
+                startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
+            } catch (e: Exception) { }
+        }
+        @JavascriptInterface fun getNotifications(): String {
+            if (!bridgeTrusted) return "[]"
+            return try { NotificationService.instance?.toJson() ?: "[]" } catch (e: Exception) { "[]" }
+        }
+        @JavascriptInterface fun dismissNotification(key: String): Boolean {
+            if (!bridgeTrusted) return false
+            return try { NotificationService.instance?.dismiss(key) ?: false } catch (e: Exception) { false }
+        }
+        @JavascriptInterface fun openNotification(key: String): Boolean {
+            if (!bridgeTrusted) return false
+            return try { NotificationService.instance?.open(key) ?: false } catch (e: Exception) { false }
+        }
+        @JavascriptInterface fun dismissAllNotifications(): Boolean {
+            if (!bridgeTrusted) return false
+            return try { NotificationService.instance?.dismissAll() ?: false } catch (e: Exception) { false }
+        }
         @JavascriptInterface fun bringAppToFront() { if (!bridgeTrusted) return; runOnUiThread { returnFromOverlay() } }
     }
 

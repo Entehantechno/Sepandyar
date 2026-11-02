@@ -26,7 +26,11 @@ bad=[x['package'] for x in items if not ((x.get('plan') or {}).get('steps'))]
 check('همه اپ‌ها برنامه گام دارند',not bad,bad)
 STEP_TYPES={'launch','wait','tap_text','tap_id','input_text','ime_enter','submit',
             'long_click','tap_xy','swipe','back','home','recents','notifications',
-            'quick_settings','power_dialog','lock_screen','screenshot','scroll'}
+            'quick_settings','power_dialog','lock_screen','screenshot','scroll',
+            'focus','a11y_focus','next_node','prev_node','select_text','select_all',
+            'copy','cut','paste','clear_text','append_text','expand','collapse',
+            'set_progress','double_tap','pinch','drag','dismiss_notifications',
+            'split_screen','headset_hook','a11y_all_apps','a11y_home','a11y_back','a11y_recents'}
 unknown=[(x['package'],st.get('type')) for x in items for st in (x['plan'] or {}).get('steps',[]) if st.get('type') not in STEP_TYPES]
 check('همه نوع گام‌ها معتبرند',not unknown,unknown)
 check('گام‌های لمس/ورودی متن دارای payload هستند',all(st.get('payload') for x in items for st in (x['plan'] or {}).get('steps',[]) if st['type'] in ('tap_text','input_text')),'')
@@ -357,6 +361,65 @@ check('بخش۹ هیچ رسپی‌ای input_text را بی‌واسطه به ta
 check('بخش۹ هر سه رسپی گام ارسال (ime_enter) دارند',
       sum(1 for _r in _recipes if "'ime_enter'" in _r)>=3,
       sum(1 for _r in _recipes if "'ime_enter'" in _r))
+
+print('--- 10) پوشش کامل کنترل (مرحلهٔ ۲۳) ---')
+# گام‌های کنش گره
+NODE_STEPS=['focus','a11y_focus','next_node','prev_node','select_text','select_all',
+            'copy','cut','paste','clear_text','append_text','expand','collapse',
+            'set_progress','double_tap','pinch','drag']
+_missing=[t for t in NODE_STEPS if '"%s"'%t not in svc]
+check('بخش۱۰ همهٔ کنش‌های گره پیاده شده‌اند', not _missing, _missing)
+for _act in ['ACTION_FOCUS','ACTION_ACCESSIBILITY_FOCUS','ACTION_NEXT_AT_MOVEMENT',
+             'ACTION_PREVIOUS_AT_MOVEMENT','ACTION_SET_SELECTION','ACTION_COPY',
+             'ACTION_CUT','ACTION_PASTE','ACTION_EXPAND','ACTION_COLLAPSE','ACTION_SET_PROGRESS']:
+    check('بخش۱۰ %s استفاده می‌شود'%_act, _act in svc, '')
+check('بخش۱۰ پارامترهای انتخاب متن درست ساخته می‌شوند',
+      'ACTION_ARGUMENT_SELECTION_START_INT' in svc and 'ACTION_ARGUMENT_SELECTION_END_INT' in svc, '')
+check('بخش۱۰ پارامتر لغزنده درست ساخته می‌شود',
+      'ACTION_ARGUMENT_PROGRESS_VALUE_FLOAT' in svc, '')
+check('بخش۱۰ نیشگون ژست «دو‌انگشتی» می‌سازد (دو StrokeDescription)',
+      svc.count('addStroke(GestureDescription.StrokeDescription(p')>=2, svc.count('addStroke'))
+
+# کنش‌های سراسری با نگهبان نسخه
+GLOBAL_STEPS=['dismiss_notifications','split_screen','headset_hook','a11y_all_apps',
+              'a11y_home','a11y_back','a11y_recents']
+_missing=[t for t in GLOBAL_STEPS if '"%s"'%t not in svc]
+check('بخش۱۰ کنش‌های سراسری تازه پیاده شده‌اند', not _missing, _missing)
+check('بخش۱۰ split_screen/headset_hook/all_apps پشت نگهبان نسخه‌اند',
+      'SDK_INT >= 24' in svc and 'SDK_INT >= 26' in svc and 'SDK_INT >= 31' in svc, '')
+
+# خواندن صفحه
+check('بخش۱۰ readScreenText پیاده شده', 'fun readScreenText()' in svc, '')
+check('بخش۱۰ فقط گره‌های نمایان خوانده می‌شوند',
+      'isVisibleToUser' in svc and 'collectText' in svc, '')
+check('بخش۱۰ تکرارهای پیاپی حذف می‌شوند (وگرنه جمله دوبار خوانده می‌شد)',
+      'dedupeConsecutive' in svc, '')
+check('بخش۱۰ طول متن خوانده‌شده کران دارد', 'SCREEN_TEXT_MAX = 4000' in svc, '')
+check('بخش۱۰ readScreenText از پل جاوااسکریپت در دسترس است',
+      'fun readScreenText(): String' in main, '')
+
+# سرویس اعلان‌ها
+notif=open(os.path.join(KT,'NotificationService.kt'),encoding='utf-8').read()
+check('بخش۱۰ NotificationService وجود دارد', 'class NotificationService : NotificationListenerService()' in notif, '')
+check('بخش۱۰ در مانیفست با مجوز درست ثبت شده',
+      'BIND_NOTIFICATION_LISTENER_SERVICE' in open(os.path.join(ROOT,'android','app','src','main','AndroidManifest.xml'),encoding='utf-8').read(), '')
+check('بخش۱۰ دسترسی اعلان «پیش‌فرض خاموش» است',
+      'getBoolean(PREF_KEY, false)' in notif, '')
+# هر سه متد عمومی باید کلید را در زمان فراخوانی بسنجند، نه فقط onNotificationPosted
+_nogate=[]
+for _fn in ['fun snapshot()','fun dismiss(','fun open(','fun dismissAll()']:
+    _i=notif.find(_fn)
+    if _i<0: _nogate.append((_fn,'NOT FOUND')); continue
+    if 'allowed(this)' not in notif[_i:_i+160]: _nogate.append((_fn,'no gate'))
+check('بخش۱۰ هر چهار متد عمومی، رضایت را در زمان فراخوانی می‌سنجند', not _nogate, _nogate)
+check('بخش۱۰ خطا فهرست «خالی» می‌دهد نه استثنا (از نخ پل صدا زده می‌شود)',
+      notif.count('catch (e: Exception)')>=4, notif.count('catch (e: Exception)'))
+check('بخش۱۰ متدهای اعلان روی پل گارد مبدأ دارند',
+      main.count('if (!bridgeTrusted) return false')>=5 and 'fun getNotifications()' in main, '')
+
+# برچسب overlay برای هر گام تازه
+_nolabel=[t for t in NODE_STEPS+GLOBAL_STEPS if '"%s"'%t not in runner]
+check('بخش۱۰ همهٔ گام‌های تازه برچسب فارسی overlay دارند', not _nolabel, _nolabel)
 
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)

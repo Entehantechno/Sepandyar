@@ -15,6 +15,15 @@
             </intent-filter>
         </activity>
         <service android:name=".ListeningService" android:foregroundServiceType="microphone" android:exported="false" />
+        <!-- خواندن اعلان‌ها. مجوز BIND_NOTIFICATION_LISTENER_SERVICE یک مجوز
+             «امضا»-محور است و کاربر باید دستی در Settings > Notification access
+             آن را بدهد؛ هیچ API ای برای گرفتن خودکارش وجود ندارد. -->
+        <service android:name=".NotificationService"
+                 android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+                 android:exported="false"
+                 android:label="سپندیار — اعلان‌ها">
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
+        </service>
         <service android:name=".ScreenControlService" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="false">
             <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config" />

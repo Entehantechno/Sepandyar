@@ -19,6 +19,12 @@ class ScreenControlService : AccessibilityService() {
         const val LONG_PRESS_MS = 600L
         /** مدت یک کشیدن؛ کوتاه‌تر از این، سامانه آن را ضربه تفسیر می‌کند. */
         const val SWIPE_MS = 320L
+        /** مدت کشیدنِ drag؛ باید بلند باشد تا سامانه آن را ضربه نبیند. */
+        const val DRAG_MS = 700L
+        /** مدت نیشگون. */
+        const val PINCH_MS = 280L
+        /** سقف متن خوانده‌شدهٔ صفحه؛ یک صفحهٔ شلوغ نباید صف گفتار را منفجر کند. */
+        const val SCREEN_TEXT_MAX = 4000
 
         /**
          * برچسب‌های رایج دکمهٔ «ارسال». فقط در مسیر جایگزین imeEnter برای
@@ -119,6 +125,32 @@ class ScreenControlService : AccessibilityService() {
         "lock_screen" -> lockScreen()
         "screenshot" -> screenshot()
         "scroll" -> scrollRoot(step.payload)
+        // --- پوشش کامل کنش‌های گره (مرحلهٔ ۲۳) ---
+        "focus" -> nodeAction(step.payload, AccessibilityNodeInfo.ACTION_FOCUS)
+        "a11y_focus" -> nodeAction(step.payload, AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+        "next_node" -> movement(step.payload, true)
+        "prev_node" -> movement(step.payload, false)
+        "select_text" -> selectText(step.payload)
+        "select_all" -> selectAll(step.payload)
+        "copy" -> nodeAction(step.payload, AccessibilityNodeInfo.ACTION_COPY)
+        "cut" -> nodeAction(step.payload, AccessibilityNodeInfo.ACTION_CUT)
+        "paste" -> nodeAction(step.payload, AccessibilityNodeInfo.ACTION_PASTE)
+        "clear_text" -> clearText(step.payload)
+        "append_text" -> appendText(step.payload)
+        "expand" -> nodeAction(step.payload, AccessibilityNodeInfo.ACTION_EXPAND)
+        "collapse" -> nodeAction(step.payload, AccessibilityNodeInfo.ACTION_COLLAPSE)
+        "set_progress" -> setProgress(step.payload)
+        "double_tap" -> doubleTap(step.payload)
+        "pinch" -> pinch(step.payload)
+        "drag" -> drag(step.payload)
+        // --- پوشش کامل کنش‌های سراسری ---
+        "dismiss_notifications" -> performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_PANEL)
+        "split_screen" -> toggleSplitScreen()
+        "headset_hook" -> headsetHook()
+        "a11y_all_apps" -> a11yAllApps()
+        "a11y_home" -> a11yNav(GLOBAL_ACTION_ACCESSIBILITY_HOME)
+        "a11y_back" -> a11yNav(GLOBAL_ACTION_ACCESSIBILITY_BACK)
+        "a11y_recents" -> a11yNav(GLOBAL_ACTION_ACCESSIBILITY_RECENTS)
         else -> false
     }
 
@@ -246,6 +278,229 @@ class ScreenControlService : AccessibilityService() {
             current = current.parent
         }
         return null
+    }
+
+    // ---- پوشش کامل کنش‌های گره (مرحلهٔ ۲۳) ----
+
+    /** یک کنش ساده روی گره‌ای که با متن پیدا شده. */
+    private fun nodeAction(query: String, action: Int): Boolean {
+        val target = SmartSelector.find(rootInActiveWindow, query) ?: return false
+        return target.performAction(action)
+    }
+
+    /** حرکت به گره بعدی/پیشین در ترتیب دسترسی‌پذیری. */
+    private fun movement(query: String, forward: Boolean): Boolean {
+        val target = if (query.isBlank()) {
+            rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+        } else {
+            SmartSelector.find(rootInActiveWindow, query)
+        } ?: return false
+        val action = if (forward) AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT
+        else AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT
+        return target.performAction(action)
+    }
+
+    /**
+     * انتخاب بخشی از متن.
+     * payload: "start,end" — اگر خالی باشد، کل متن انتخاب می‌شود.
+     */
+    private fun selectText(payload: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: findEditable(root) ?: return false
+        val len = target.text?.length ?: 0
+        val parts = payload.split(',').mapNotNull { it.trim().toIntOrNull() }
+        val start = if (parts.size == 2) parts[0].coerceIn(0, len) else 0
+        val end = if (parts.size == 2) parts[1].coerceIn(start, len) else len
+        val args = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end)
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+    }
+
+    private fun selectAll(query: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val target = if (query.isBlank()) {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: findEditable(root)
+        } else SmartSelector.find(root, query) ?: return false
+        val len = target.text?.length ?: 0
+        val args = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+    }
+
+    /** خالی کردن فیلد؛ ACTION_SET_TEXT با رشتهٔ خالی. */
+    private fun clearText(query: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val target = if (query.isBlank()) {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable } ?: findEditable(root)
+        } else SmartSelector.find(root, query) ?: return false
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    /** افزودن به انتهای متن موجود به‌جای جایگزینی آن. */
+    private fun appendText(value: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable }
+            ?: findEditable(root) ?: return false
+        val current = target.text?.toString() ?: ""
+        val merged = if (current.isEmpty()) value else "$current $value"
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, merged)
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    /**
+     * تنظیم مقدار یک لغزنده/نوار پیشرفت. payload یک عدد اعشاری است.
+     * ACTION_SET_PROGRESS از API 24 است و minSdk ما ۲۶، پس نگهبان نمی‌خواهد.
+     */
+    private fun setProgress(payload: String): Boolean {
+        val value = payload.trim().toFloatOrNull() ?: return false
+        val root = rootInActiveWindow ?: return false
+        val target = findRangeInfo(root) ?: return false
+        val args = Bundle().apply {
+            putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE_FLOAT, value)
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_PROGRESS, args)
+    }
+
+    private fun findRangeInfo(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val ri = node.rangeInfo
+        if (ri != null && node.isVisibleToUser) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            findRangeInfo(child)?.also { return it }
+        }
+        return null
+    }
+
+    // ---- ژست‌های پیشرفته ----
+
+    /** دوبار ضربهٔ سریع روی یک عنصر. */
+    private fun doubleTap(query: String): Boolean {
+        val target = SmartSelector.find(rootInActiveWindow, query) ?: return false
+        val rect = Rect()
+        target.getBoundsInScreen(rect)
+        if (rect.isEmpty) return false
+        val x = rect.exactCenterX(); val y = rect.exactCenterY()
+        if (x <= 0f || y <= 0f) return false
+        if (!pressAt(x, y, 60L)) return false
+        main.postDelayed({ pressAt(x, y, 60L) }, 90)
+        return true
+    }
+
+    /**
+     * نیشگون (بزرگ‌نمایی/کوچک‌نمایی) با دو انگشت.
+     * payload: "in" یا "out".
+     * ژست چندانگشتی از API 26 پشتیبانی می‌شود که همان minSdk ماست.
+     */
+    private fun pinch(payload: String): Boolean {
+        val w = resources.displayMetrics.widthPixels.toFloat()
+        val h = resources.displayMetrics.heightPixels.toFloat()
+        if (w <= 0f || h <= 0f) return false
+        val cx = w / 2; val cy = h / 2
+        val near = minOf(w, h) * 0.06f
+        val far = minOf(w, h) * 0.35f
+        val (r1, r2) = if (payload.trim() == "in") far to near else near to far
+        val pA = Path().apply { moveTo(cx - r1, cy - r1); lineTo(cx - r2, cy - r2) }
+        val pB = Path().apply { moveTo(cx + r1, cy + r1); lineTo(cx + r2, cy + r2) }
+        val builder = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(pA, 0, PINCH_MS))
+            .addStroke(GestureDescription.StrokeDescription(pB, 0, PINCH_MS))
+        return dispatchGesture(builder.build(), null, null)
+    }
+
+    /**
+     * کشیدن آرام یک عنصر به مختصات دیگر (drag).
+     * payload: "x1,y1,x2,y2[,durationMs]" — مدت پیش‌فرض بلند است تا سامانه
+     * آن را «کشیدن» ببیند نه «ضربه».
+     */
+    private fun drag(payload: String): Boolean {
+        val n = payload.split(',').map { it.trim().toFloatOrNull() }.takeIf { it.all { v -> v != null } }
+            ?.mapNotNull { it } ?: return false
+        if (n.size < 4) return false
+        val dur = if (n.size >= 5) n[4].toLong().coerceAtLeast(1L) else DRAG_MS
+        val path = Path().apply { moveTo(n[0], n[1]); lineTo(n[2], n[3]) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, dur)
+        return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    }
+
+    // ---- کنش‌های سراسری با نگهبان نسخه ----
+
+    private fun toggleSplitScreen(): Boolean =
+        if (Build.VERSION.SDK_INT >= 24) performGlobalAction(GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN) else false
+
+    private fun headsetHook(): Boolean =
+        if (Build.VERSION.SDK_INT >= 26) performGlobalAction(GLOBAL_ACTION_KEYCODE_HEADSETHOOK) else false
+
+    private fun a11yAllApps(): Boolean =
+        if (Build.VERSION.SDK_INT >= 31) performGlobalAction(GLOBAL_ACTION_ACCESSIBILITY_ALL_APPS) else false
+
+    private fun a11yNav(action: Int): Boolean =
+        if (Build.VERSION.SDK_INT >= 31) performGlobalAction(action) else false
+
+    // ---- خواندن صفحه ----
+
+    /**
+     * متن صفحه را به ترتیب خواندن بیرون می‌کشد.
+     *
+     * این برای سالمند مهم‌ترین قابلیت است: «چی روی صفحه است؟» باید با صدا
+     * جواب داده شود. ما درخت گره‌ها را داریم، پس لازم نیست حدس بزنیم.
+     *
+     * سه نکتهٔ کیفی که عمداً رعایت شده:
+     *  - فقط گره‌های isVisibleToUser؛ وگرنه متن پنهان هم خوانده می‌شود.
+     *  - text بر contentDescription اولویت دارد، ولی اگر متن خالی بود
+     *    توضیح جای آن را می‌گیرد (بسیاری از دکمه‌های تصویری فقط desc دارند).
+     *  - تکرارهای «پیاپی» حذف می‌شوند؛ درخت اندروید پر از والد/فرزندی است
+     *    که همان متن را دو بار حمل می‌کنند و بدون این، جمله دو بار خوانده
+     *    می‌شد.
+     *
+     * طول خروجی کران دارد تا یک صفحهٔ شلوغ، صف گفتار را منفجر نکند.
+     */
+    fun readScreenText(): String {
+        val root = rootInActiveWindow ?: return ""
+        val out = StringBuilder()
+        collectText(root, out)
+        return dedupeConsecutive(out.toString()).trim()
+    }
+
+    private fun collectText(node: AccessibilityNodeInfo?, out: StringBuilder) {
+        if (node == null || out.length >= SCREEN_TEXT_MAX) return
+        if (node.isVisibleToUser) {
+            val t = node.text?.toString()?.trim()
+            val d = node.contentDescription?.toString()?.trim()
+            val pick = when {
+                !t.isNullOrEmpty() -> t
+                !d.isNullOrEmpty() -> d
+                else -> null
+            }
+            if (pick != null) {
+                if (out.isNotEmpty()) out.append('\n')
+                out.append(pick)
+            }
+        }
+        for (i in 0 until node.childCount) collectText(node.getChild(i), out)
+    }
+
+    private fun dedupeConsecutive(input: String): String {
+        val lines = input.split('\n')
+        val sb = StringBuilder()
+        var prev: String? = null
+        for (raw in lines) {
+            val line = raw.trim()
+            if (line.isEmpty() || line == prev) continue
+            if (sb.isNotEmpty()) sb.append('\n')
+            sb.append(line)
+            prev = line
+        }
+        val text = sb.toString()
+        return if (text.length <= SCREEN_TEXT_MAX) text else text.substring(0, SCREEN_TEXT_MAX)
     }
 
     /** قفل کردن صفحه. GLOBAL_ACTION_LOCK_SCREEN از API 28 است و minSdk ما ۲۶. */
