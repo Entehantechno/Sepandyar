@@ -3,6 +3,8 @@ package ai.arena.sepandyar
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.PixelFormat
+import android.os.Handler
+import android.os.Looper
 import android.graphics.drawable.GradientDrawable
 import android.provider.Settings
 import android.view.Gravity
@@ -29,6 +31,10 @@ object OverlayController {
     private var detailView: TextView? = null
     private var bar: ProgressBar? = null
     private var cancelHandler: (() -> Unit)? = null
+
+    private val main = Handler(Looper.getMainLooper())
+    private var confirmView: View? = null
+    private var confirmTimer: Runnable? = null
 
     var visible: Boolean = false
         private set
@@ -175,6 +181,7 @@ object OverlayController {
     }
 
     fun hide() {
+        dismissConfirm()
         val view = card ?: return
         try {
             wm?.removeView(view)
@@ -188,4 +195,116 @@ object OverlayController {
         cancelHandler = null
         visible = false
     }
+    /**
+     * کارت تأیید برای گام‌های «تعهدآور» — همان‌هایی که یک تعهد واقعی یا
+     * مالی ثبت می‌کنند.
+     *
+     * **چرا لازم است:** پیش‌تر رسپی اسنپ روی «درخواست خودرو» بدون هیچ
+     * `expect` و بدون هیچ تأییدی ضربه می‌زد و **یک سفر واقعی ثبت می‌شد**.
+     * هیچ اتوماسیونی نباید تعهد واقعی را بدون تأیید صریح انسان ثبت کند؛
+     * این همان «تحویل کنترل در نقطهٔ پرداخت» است که همهٔ ابزارهای این
+     * حوزه انجام می‌دهند.
+     *
+     * سه تصمیم عمدی:
+     *  - **پیش‌فرض «نه».** تایم‌اوت، نبودِ اجازهٔ overlay، یا هر استثنا ⇒
+     *    `false`. شکست باید به سمت «انجام نشد» برود، نه «انجام شد».
+     *  - **دکمه‌ها ۵۶dp** — بزرگ‌تر از کف ۴۸dp خودِ پروژه، چون این
+     *    مهم‌ترین تصمیم روی صفحه است.
+     *  - **تأیید با لمس است نه با صدا.** تشخیص گفتار در محیط شلوغ خطا
+     *    دارد و یک «بله»ی اشتباه شنیده‌شده نباید سفر ثبت کند.
+     *
+     * `onDone` **دقیقاً یک بار** صدا زده می‌شود — تایم‌اوت و لمس با هم
+     * مسابقه می‌دهند و بدون این محافظ، گام اجراکننده دو بار ادامه می‌داد.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    fun showConfirm(context: Context, heading: String, detail: String,
+                    timeoutMs: Long, onDone: (Boolean) -> Unit) {
+        val app = context.applicationContext
+        val fired = java.util.concurrent.atomic.AtomicBoolean(false)
+        val deny = Runnable {
+            if (!fired.compareAndSet(false, true)) return@Runnable
+            dismissConfirm()
+            onDone(false)
+        }
+        if (!canDrawOverlays(app)) { onDone(false); return }
+        val density = app.resources.displayMetrics.density
+        fun dp(v: Int): Int = (v * density).toInt()
+        try {
+            if (wm == null) wm = app.getSystemService(WindowManager::class.java)
+            val panel = LinearLayout(app).apply {
+                orientation = LinearLayout.VERTICAL
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(20).toFloat()
+                    setColor(0xF71B3B36.toInt())
+                }
+                setPadding(dp(18), dp(18), dp(18), dp(16))
+                layoutParams = LinearLayout.LayoutParams(dp(300), LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+            panel.addView(TextView(app).apply {
+                text = heading
+                textSize = 17f
+                setTextColor(0xFFFFFFFF.toInt())
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            })
+            panel.addView(TextView(app).apply {
+                text = detail
+                textSize = 14f
+                setTextColor(0xEEFFFFFF.toInt())
+                setPadding(0, dp(8), 0, dp(14))
+            })
+            val row = LinearLayout(app).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            // «نه» اول و سمت راست (راست‌چین): گزینهٔ بی‌خطر باید دمِ دست باشد.
+            row.addView(Button(app).apply {
+                text = "نه، لغو کن"
+                textSize = 15f
+                setTextColor(0xFFFFFFFF.toInt())
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(14).toFloat(); setColor(0x40FFFFFF)
+                }
+                layoutParams = LinearLayout.LayoutParams(0, dp(56), 1f)
+                setOnClickListener { deny.run() }
+            })
+            row.addView(Button(app).apply {
+                text = "بله، تأیید می‌کنم"
+                textSize = 15f
+                setTextColor(0xFFFFFFFF.toInt())
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(14).toFloat(); setColor(0xFF3E8E7E.toInt())
+                }
+                layoutParams = LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginStart = dp(10) }
+                setOnClickListener {
+                    if (fired.compareAndSet(false, true)) { dismissConfirm(); onDone(true) }
+                }
+            })
+            panel.addView(row)
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply { gravity = Gravity.CENTER }
+            wm?.addView(panel, params)
+            confirmView = panel
+            confirmTimer = deny
+            main.postDelayed(deny, if (timeoutMs > 0) timeoutMs else 30000L)
+        } catch (e: Exception) {
+            if (fired.compareAndSet(false, true)) onDone(false)
+        }
+    }
+
+    /** بستن کارت تأیید و لغو تایم‌اوت. از هر نخی امن است. */
+    private fun dismissConfirm() {
+        val run = Runnable {
+            confirmTimer?.let { main.removeCallbacks(it) }
+            confirmTimer = null
+            val v = confirmView ?: return@Runnable
+            try { wm?.removeView(v) } catch (e: Exception) { }
+            confirmView = null
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) run.run() else main.post(run)
+    }
+
 }

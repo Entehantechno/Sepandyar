@@ -387,6 +387,76 @@ console.log('--- ۸) «صفحه را برایم بخوان»: ترتیب مسی�
   })();
 }
 
+console.log('--- ۹) پرسیدن پارامتر رسپی از سالمند ---');
+{
+  // بدون این جریان، رسپی اسنپ {{destination}} را ندارد و ScreenTask.parse
+  // کل کار را رد می‌کند (fail-fast). پس این تنها راهِ اجرای واقعی رسپی است.
+  const dom = new JSDOM('<!doctype html><html><body><div id="modal"></div>' +
+                        '<div id="modal-content"></div></body></html>',
+                        { runScripts: 'outside-only' });
+  const w = dom.window;
+  const spoken9 = []; w.speakBack = t => spoken9.push(t);
+  w.toast = () => {};
+  w.closeModal = () => { w.document.getElementById('modal').classList.remove('open'); };
+  w.esc = t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const grab9 = (name) => {
+    let i = html.indexOf('function ' + name + '(');
+    if (i < 0) throw new Error('not found: ' + name);
+    if (html.slice(i - 6, i) === 'async ') i -= 6;
+    let d = 0, j = html.indexOf('{', i);
+    for (let k = j; k < html.length; k++) {
+      if (html[k] === '{') d++;
+      else if (html[k] === '}') { d--; if (d === 0) return html.slice(i, k + 1); }
+    }
+    throw new Error('unbalanced: ' + name);
+  };
+  w.eval('var PARAM_ASK=' + JSON.stringify({ destination: 'کجا می‌روید؟ آدرس مقصد را بگویید.', item: 'چه چیزی می‌خواهید سفارش دهید؟' }) +
+         ';\n' + grab9('askForParam') + '\n;window.askForParam=askForParam;');
+
+  const P9 = [];
+  // ۱) سؤال درست پرسیده می‌شود و مودال ورودی باز است
+  let r1 = w.askForParam('destination');
+  check('سؤال مقصد با صدا پرسیده می‌شود', spoken9[0] === 'کجا می‌روید؟ آدرس مقصد را بگویید.', spoken9);
+  check('مودال ورودی باز می‌شود', w.document.getElementById('modal').classList.contains('open'), '');
+  check('فیلد ورودی ساخته می‌شود', !!w.document.getElementById('param-value'), '');
+  w.__paramYes.call ? null : null;
+  w.document.getElementById('param-value').value = '  میدان آزادی  ';
+  w.__paramYes();
+  P9.push(r1.then(v => {
+    check('مقدار تایپ‌شده با فاصله‌های اضافی تمیز برمی‌گردد', v === 'میدان آزادی', v);
+    check('مودال پس از پاسخ بسته می‌شود', !w.document.getElementById('modal').classList.contains('open'), '');
+  }));
+
+  // ۲) انصراف ⇒ null (و کار رد می‌شود، نه با مقدار خالی اجرا شود)
+  let r2 = w.askForParam('item');
+  w.__paramNo();
+  P9.push(r2.then(v => check('انصراف null می‌دهد تا کار رد شود', v === null, v)));
+
+  // ۳) فیلد خالی هم null است، نه رشتهٔ خالی
+  let r3 = w.askForParam('item');
+  w.document.getElementById('param-value').value = '   ';
+  w.__paramYes();
+  P9.push(r3.then(v => check('فیلد خالی null می‌دهد نه رشتهٔ خالی', v === null, JSON.stringify(v))));
+
+  // ۴) هر دو پارامترِ رسپی‌ها سؤال اختصاصی دارند
+  check('هر دو پارامتر رسپی سؤال اختصاصی دارند',
+    w.PARAM_ASK.destination && w.PARAM_ASK.item, Object.keys(w.PARAM_ASK));
+
+  // ۵) استخراج پارامتر از رسپی: runScreenApp باید {{destination}} را ببیند
+  const snappSteps = JSON.stringify([{ type: 'input_text', payload: '{{destination}}' },
+                                     { type: 'confirm', payload: 'تأیید؟' }]);
+  const need = [];
+  (snappSteps.match(/\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}/g) || [])
+    .forEach(m => { const k = m.replace(/[{}\s]/g, ''); if (need.indexOf(k) < 0) need.push(k); });
+  check('استخراج پارامتر از رسپی درست کار می‌کند', need.length === 1 && need[0] === 'destination', need);
+  check('runScreenApp پارامترها را داخل plan می‌فرستد',
+    /params:params/.test(html) && /await askForParam\(k\)/.test(html), '');
+  check('resپی بدون پارامتر بن‌بست نمی‌سازد (حلقه روی فهرست خالی)',
+    /\(raw\.match/.test(html.replace('_raw', 'raw')) || /_raw\.match/.test(html), '');
+
+  consentDone = Promise.all([consentDone].concat(P9));
+}
+
 console.log('--- ۷) همسان بودن دارایی اندروید ---');
 {
   const asset = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'assets', 'index.html'), 'utf8');

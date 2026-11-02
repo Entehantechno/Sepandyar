@@ -334,7 +334,56 @@ function hideScreenOverlay(){const el=document.getElementById('screen-overlay');
 function cancelScreenRun(){if(window.SepandyarNative&&window.SepandyarNative.cancelScreenTask){window.SepandyarNative.cancelScreenTask();return}if(screenRunState)screenRunState.cancelled=true}
 function stepLabel(t){return{launch:'باز کردن اپ',tap_text:'لمس کردن',input_text:'وارد کردن متن',tap_xy:'لمس نقطه',scroll:'پیمایش صفحه',back:'بازگشت',home:'صفحه اصلی',wait:'کمی صبر کنید'}[t]||'در حال اجرا'}
 function reportScreenRun(plan,status,done,error){apiRequest('/api/screen-tasks',{method:'POST',body:JSON.stringify({package:plan.package,title:plan.title,status:status,steps_total:(plan.steps||[]).length,steps_done:done,error:error||''})})}
-async function runScreenApp(pkg){const apps=window.__approvedApps||[];const app=apps.find(a=>a.package===pkg);if(!app){toast('این اپ در فهرست تأییدشده نیست');return}const plan={id:String(Date.now()),title:app.label,package:app.package,steps:(app.plan||{}).steps||[],return_to_app:true};screenRunState={plan:plan,done:0,cancelled:false,native:!!(window.SepandyarNative&&window.SepandyarNative.runScreenTask)};if(screenRunState.native){showScreenOverlay('در حال باز کردن '+app.label,'سپندیار کنترل را به دست گرفت',0,plan.steps.length);const started=window.SepandyarNative.runScreenTask(JSON.stringify(plan));if(!started){hideScreenOverlay();speakBack('اجرای کار ممکن نشد؛ شاید کار دیگری در جریان است.');return}closeModal();speakBack('دارم '+app.label+' را باز می‌کنم. کارت کوچک روی صفحه را می‌بینید و هر وقت خواستید لغو کنید.');return}closeModal();simulateScreenRun(plan,app)}
+/*
+  پرسیدن یک پارامتر رسپی از سالمند.
+
+  سه تصمیم عمدی:
+   - هم صدا هم ورودی دستی. تشخیص گفتار در محیط شلوغ یا برای سالمند
+     کم‌شنوا خطا دارد؛ اگر فقط صدا بود، بن‌بست می‌خوردیم.
+   - خطای میکروفون «بن‌بست» نمی‌سازد: r.onerror عمداً خالی است چون فیلد
+     دستی روی صفحه هست و کار با آن ادامه می‌یابد.
+   - سقف زمانی ۴۵ ثانیه ⇒ null. بی‌پاسخ ماندنِ بی‌نهایت یعنی مودال باز
+     می‌ماند و سالمند نمی‌داند چه شده.
+*/
+var PARAM_ASK={destination:'کجا می‌روید؟ آدرس مقصد را بگویید.',item:'چه چیزی می‌خواهید سفارش دهید؟'};
+function askForParam(key){
+  return new Promise(function(resolve){
+    var q=PARAM_ASK[key]||('لطفاً '+key+' را بگویید.');
+    var settled=false;
+    function done(v){if(settled)return;settled=true;v=v&&String(v).trim()?String(v).trim():null;closeModal();resolve(v)}
+    speakBack(q);
+    var ph=key==='destination'?'مثلاً میدان آزادی':(key==='item'?'مثلاً شیر کم‌چرب':'');
+    document.getElementById('modal-content').innerHTML='<h2>'+esc(q)+'</h2>'+
+      '<label class="name-label">پاسخ شما</label>'+
+      '<input id="param-value" class="name-input full" placeholder="'+esc(ph)+'"/>'+
+      '<div class="modal-actions"><button class="secondary" onclick="window.__paramNo&&window.__paramNo()">انصراف</button>'+
+      '<button class="primary" onclick="window.__paramYes&&window.__paramYes()">ادامه</button></div>';
+    document.getElementById('modal').classList.add('open');
+    window.__paramYes=function(){var el=document.getElementById('param-value');done(el?el.value:null)};
+    window.__paramNo=function(){done(null)};
+    var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(SR){
+      var r=new SR();r.lang='fa-IR';r.continuous=false;r.interimResults=false;
+      // گفتار هم فیلد را پر می‌کند و هم ادامه می‌دهد؛ سالمند پیش از ادامه
+      // می‌بیند چه چیزی فهمیده شده است.
+      r.onresult=function(e){var t=e.results[0][0].transcript;var el=document.getElementById('param-value');if(el)el.value=t;done(t)};
+      r.onerror=function(){};
+      try{r.start()}catch(e){}
+    }
+    setTimeout(function(){if(!settled)done(null)},45000);
+  });
+}
+async function runScreenApp(pkg){const apps=window.__approvedApps||[];const app=apps.find(a=>a.package===pkg);if(!app){toast('این اپ در فهرست تأییدشده نیست');return}
+/*
+  پارامترهای لازم از «خودِ رسپی» استخراج می‌شوند، نه از یک فهرست دستی در
+  جاوااسکریپت. وگرنه هر رسپی تازه یک تغییر دوم هم می‌خواست و فراموش کردنش
+  بی‌صدا کار را رد می‌کرد. این همان قاعدهٔ {{نام}} در ScreenTask.kt است.
+*/
+const _raw=JSON.stringify((app.plan||{}).steps||[]);
+const _need=[];(_raw.match(/\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}/g)||[]).forEach(function(m){var k=m.replace(/[{}\s]/g,'');if(_need.indexOf(k)<0)_need.push(k)});
+const params={};
+for(const k of _need){const v=await askForParam(k);if(!v){speakBack('بدون این نمی‌توانم ادامه بدهم. هر وقت خواستید دوباره امتحان کنیم.');return}params[k]=v}
+const plan={id:String(Date.now()),title:app.label,package:app.package,steps:(app.plan||{}).steps||[],params:params,return_to_app:true};screenRunState={plan:plan,done:0,cancelled:false,native:!!(window.SepandyarNative&&window.SepandyarNative.runScreenTask)};if(screenRunState.native){showScreenOverlay('در حال باز کردن '+app.label,'سپندیار کنترل را به دست گرفت',0,plan.steps.length);const started=window.SepandyarNative.runScreenTask(JSON.stringify(plan));if(!started){hideScreenOverlay();speakBack('اجرای کار ممکن نشد؛ شاید کار دیگری در جریان است.');return}closeModal();speakBack('دارم '+app.label+' را باز می‌کنم. کارت کوچک روی صفحه را می‌بینید و هر وقت خواستید لغو کنید.');return}closeModal();simulateScreenRun(plan,app)}
 function simulateScreenRun(plan,app){let i=0;const total=(plan.steps||[]).length;showScreenOverlay('در حال باز کردن '+app.label,'اجرای نمایشی در مرورگر',0,total);speakBack('دارم '+app.label+' را باز می‌کنم.');const tick=()=>{if(!screenRunState||screenRunState.cancelled){hideScreenOverlay();screenRunState=null;speakBack('کار لغو شد.');return}if(i>=total){hideScreenOverlay();screenRunState=null;speakBack('کار «'+app.label+'» انجام شد و به سپندیار برگشتیم.');reportScreenRun(plan,'done',total,'');return}const st=plan.steps[i];showScreenOverlay(stepLabel(st.type),st.payload||'',i,total);i++;if(screenRunState)screenRunState.done=i;setTimeout(tick,1400)};setTimeout(tick,1200)}
 window.onScreenTaskResult=function(res){hideScreenOverlay();const plan=(screenRunState&&screenRunState.plan)||{package:res.package,title:res.title,steps:[]};screenRunState=null;if(res.status==='done'){speakBack('کار «'+res.title+'» انجام شد و به سپندیار برگشتیم.')}else if(res.status==='cancelled'){speakBack('کار لغو شد و به سپندیار برگشتیم.')}else{speakBack('کار ناتمام ماند. '+(res.error||''))}reportScreenRun(plan,res.status,res.steps_done||0,res.error||'')};
 /* ---- موتور صبر گفتاری ----

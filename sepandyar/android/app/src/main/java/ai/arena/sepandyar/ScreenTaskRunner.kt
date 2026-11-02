@@ -81,6 +81,13 @@ object ScreenTaskRunner {
             return
         }
         val step = current.steps[index]
+        // گام تأیید پیش از هر ضربهٔ تعهدآور: تصمیم با خودِ سالمند است.
+        // عمداً از attempt() عبور نمی‌کند، چون performStep هیچ کاری برای آن
+        // ندارد و ورود به حلقهٔ تلاش فقط تایم‌اوت بی‌مصرف می‌ساخت.
+        if (step.type == "confirm") {
+            askConfirm(step, current.steps.size)
+            return
+        }
         val svc = ScreenControlService.instance
         if (svc == null) {
             finish("failed", "سرویس کنترل صفحه فعال نیست؛ از تنظیمات، دسترسی دسترس‌پذیری را روشن کنید")
@@ -127,6 +134,45 @@ object ScreenTaskRunner {
             return
         }
         finish("failed", "«${step.payload}» روی صفحه پیدا نشد")
+    }
+
+    /**
+     * گام «confirm»: اجرا را متوقف می‌کند تا سالمند صریحاً تأیید کند.
+     *
+     * سه تصمیم عمدی:
+     *  - **تأییدِ کور ممنوع.** اگر `expect` داده شده ولی آن متن الان روی
+     *    صفحه نیست، گام «شکست» می‌خورد. تأیید چیزی که هنوز نیامده — مثلاً
+     *    مبلغی که هنوز محاسبه نشده — بی‌معناست.
+     *  - **متن صفحه هم نشان داده می‌شود** تا سالمند بداند دارد چه چیزی را
+     *    تأیید می‌کند، نه فقط یک جملهٔ کلی.
+     *  - **تایم‌اوت ⇒ لغو**، نه ادامه. پیش‌فرض همیشه «نه» است.
+     */
+    private fun askConfirm(step: ScreenStep, total: Int) {
+        val app = appContext ?: return
+        val svc = ScreenControlService.instance
+        if (step.expect.isNotBlank() && (svc == null || !svc.isTextVisible(step.expect))) {
+            finish("failed", "پیش از تأیید، «${step.expect}» روی صفحه دیده نشد")
+            return
+        }
+        OverlayController.update("نیازمند تأیید شما", step.payload, index, total.coerceAtLeast(1))
+        // خواندن متن صفحه برای نشان دادن «چه چیزی» دارد تأیید می‌شود.
+        // خطا اینجا مجاز است: نبودِ متن نباید جلوی خودِ تأیید را بگیرد.
+        val onScreen = try { svc?.readScreenText()?.take(220) ?: "" } catch (e: Exception) { "" }
+        val prompt = if (step.payload.isBlank()) "ادامهٔ این کار را تأیید می‌کنید؟" else step.payload
+        val detail = if (onScreen.isBlank()) prompt else "$prompt\n\nروی صفحه: $onScreen"
+        OverlayController.showConfirm(
+            app, "تأیید شما لازم است", detail,
+            if (step.timeoutMs > 0) step.timeoutMs else 45000L
+        ) { approved ->
+            // اگر در فاصلهٔ انتظار لغو شده باشد، ادامه نمی‌دهیم.
+            if (cancelled) return@showConfirm
+            if (approved) {
+                index += 1
+                main.postDelayed({ runStep() }, 500)
+            } else {
+                finish("cancelled", "سالمند تأیید نکرد")
+            }
+        }
     }
 
     private fun finish(status: String, error: String) {
@@ -187,6 +233,7 @@ object ScreenTaskRunner {
         "recents" -> "اپ‌های اخیر"
         "tap_id" -> "لمس کردن"
         "ime_enter", "submit" -> "ارسال کردن"
+        "confirm" -> "نیازمند تأیید شما"
         "long_click" -> "نگه‌داشتن انگشت"
         "swipe" -> "کشیدن صفحه"
         "notifications" -> "اعلان‌ها"

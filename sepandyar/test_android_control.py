@@ -34,7 +34,7 @@ STEP_TYPES={'launch','wait','tap_text','tap_id','input_text','ime_enter','submit
             'focus','a11y_focus','next_node','prev_node','select_text','select_all',
             'copy','cut','paste','clear_text','append_text','expand','collapse',
             'set_progress','double_tap','pinch','drag','dismiss_notifications',
-            'split_screen','headset_hook','a11y_all_apps','a11y_home','a11y_back','a11y_recents'}
+            'split_screen','headset_hook','a11y_all_apps','a11y_home','a11y_back','a11y_recents','confirm'}
 unknown=[(x['package'],st.get('type')) for x in items for st in (x['plan'] or {}).get('steps',[]) if st.get('type') not in STEP_TYPES]
 check('همه نوع گام‌ها معتبرند',not unknown,unknown)
 check('گام‌های لمس/ورودی متن دارای payload هستند',all(st.get('payload') for x in items for st in (x['plan'] or {}).get('steps',[]) if st['type'] in ('tap_text','input_text')),'')
@@ -45,8 +45,19 @@ block=svc[svc.find('fun performStep'):]
 block=block[:block.find('\n    }\n')+5] if '\n    }\n' in block else block
 kotlin_types=set(re.findall(r'"([a-z_]+)"',block))
 server_types={st['type'] for x in items for st in (x['plan'] or {}).get('steps',[])}
-missing=server_types-kotlin_types
+# گام‌هایی که «عمداً» در performStep نیستند: یک لایه بالاتر، در
+# ScreenTaskRunner، اجرا می‌شوند. confirm هیچ کنش دسترس‌پذیری ندارد — کارش
+# متوقف کردن اجرا تا تأیید صریح سالمند است، و ورودش به performStep یعنی
+# ساختن یک کنش جعلی که همیشه false می‌دهد.
+# اما استثنا گذاشتن خطر دارد: اگر گامی نه در performStep باشد نه در
+# اجراکننده، بی‌صدا حذف می‌شود. پس سنجش دوم همین را می‌بندد.
+RUNNER_LEVEL_STEPS={'confirm'}
+_rn2=open(os.path.join(KT,'ScreenTaskRunner.kt'),encoding='utf-8').read()
+missing=server_types-kotlin_types-RUNNER_LEVEL_STEPS
 check('هر نوع گام سرور در performStep پیاده شده',not missing,(missing,kotlin_types))
+_dropped=[t for t in (server_types & RUNNER_LEVEL_STEPS) if '"%s"'%t not in _rn2]
+check('گام‌های سطح اجراکننده واقعاً مدیریت می‌شوند (بی‌صدا حذف نمی‌شوند)',
+      not _dropped, _dropped)
 main=open(os.path.join(KT,'MainActivity.kt'),encoding='utf-8').read()
 bridge=set(re.findall(r'@JavascriptInterface fun (\w+)',main))
 web=open(os.path.join(ROOT,'index.html'),encoding='utf-8').read()
@@ -612,6 +623,80 @@ for _fn in sorted(f for f in os.listdir(KT) if f.endswith('.kt')):
     if _k.count('{')!=_k.count('}') or _k.count('(')!=_k.count(')'):
         _unbal.append((_fn,_k.count('{'),_k.count('}'),_k.count('('),_k.count(')')))
 check('بخش۱۱ کروشه و پرانتز همهٔ فایل‌های Kotlin متوازن است', not _unbal, _unbal)
+
+print('--- 12) هیچ تعهدی بدون تأیید صریح سالمند ثبت نمی‌شود ---')
+# باگ امنیتی واقعی که در امکان‌سنجی مرحلهٔ ۲۴ پیدا شد: رسپی اسنپ روی
+# «درخواست خودرو» بدون expect و بدون تأیید ضربه می‌زد و یک سفر «واقعی»
+# ثبت می‌شد. گام confirm اضافه شد و این بخش نامتغیر آن را پاس می‌دارد.
+
+# برچسب‌هایی که یک تعهد واقعی/مالی ثبت می‌کنند. اگر رسپی روی یکی از این‌ها
+# ضربه بزند، باید پیش از آن یک گام confirm آمده باشد.
+COMMIT12=['درخواست خودرو','ثبت سفارش','پرداخت','تأیید نهایی','ارسال سفارش',
+          'خرید','ثبت و پرداخت','place order','confirm order','pay now','checkout']
+_types12=[]
+for _x in items:
+    _seq=[st for st in (_x['plan'] or {}).get('steps',[])]
+    _seen_confirm=False
+    for _st in _seq:
+        if _st['type']=='confirm': _seen_confirm=True; continue
+        if _st['type']=='tap_text' and str(_st.get('payload') or '').strip() in COMMIT12:
+            if not _seen_confirm: _types12.append((_x['package'],_st['payload']))
+check('بخش۱۲ هیچ ضربهٔ تعهدآوری بدون confirm پیشین نیست', not _types12, _types12)
+check('بخش۱۲ گام confirm در رسپی‌های تعهدآور وجود دارد',
+      any(st['type']=='confirm' for x in items for st in (x['plan'] or {}).get('steps',[])), '')
+
+# confirm باید در اجراکننده پیاده شده باشد، وگرنه بی‌صدا رد می‌شود و
+# «تأیید» هیچ اثری ندارد — همان باگی که در مرحلهٔ ۲۲ برای ime_enter داشتیم.
+_rn12=open(os.path.join(KT,'ScreenTaskRunner.kt'),encoding='utf-8').read()
+check('بخش۱۲ confirm در اجراکننده پیاده شده',
+      'step.type == "confirm"' in _rn12 and 'fun askConfirm' in _rn12, '')
+# گام confirm نباید از attempt() رد شود: performStep برای آن کاری ندارد و
+# ورود به حلقهٔ تلاش فقط تایم‌اوت بی‌مصرف می‌سازد.
+_rs12=_rn12[_rn12.find('private fun runStep'):_rn12.find('private fun attempt')]
+check('بخش۱۲ confirm پیش از attempt() برمی‌گردد (حلقهٔ تلاش بی‌مصرف نمی‌سازد)',
+      0 < _rs12.find('"confirm"') < _rs12.find('attempt(step'), (_rs12.find('"confirm"'), _rs12.find('attempt(step')))
+check('بخش۱۲ برچسب فارسی overlay برای confirm هست', '"confirm" ->' in _rn12, '')
+
+# کارت تأیید: سه قید حریم/ایمنی
+_oc12=open(os.path.join(KT,'OverlayController.kt'),encoding='utf-8').read()
+_sc12=_oc12[_oc12.find('fun showConfirm'):]
+check('بخش۱۲ کارت تأیید دو دکمه دارد (نه فقط «باشه»)',
+      _sc12.count('setOnClickListener')==2, _sc12.count('setOnClickListener'))
+# پیش‌فرض باید «نه» باشد: تایم‌اوت، نبودِ اجازهٔ overlay و هر استثنا ⇒ false.
+check('بخش۱۲ پیش‌فرض «نه» است (تایم‌اوت و استثنا ⇒ رد)',
+      _sc12.count('onDone(false)')>=3 and 'onDone(true)' in _sc12,
+      (_sc12.count('onDone(false)'), _sc12.count('onDone(true)')))
+# تایم‌اوت و لمس مسابقه می‌دهند؛ بدون محافظ، گام اجراکننده دو بار ادامه می‌داد.
+# نسخهٔ نخست فقط «رشته وجود دارد» را می‌سنجید و پروب تهی‌نبودن لو داد که
+# ضعیف است: دو تا از سه occurrences محافظ را عوض کردم و سنجش همچنان سبز
+# ماند. حالا «شمارش» می‌کنیم. سه مسیر با هم مسابقه می‌دهند: تایم‌اوت،
+# لمس «بله»، و استثنا. پس هر سه باید compareAndSet داشته باشند.
+# (فراخوانی چهارم onDone در مسیر «اجازهٔ overlay نیست» عمداً بی‌محافظ است:
+#  پیش از ثبت هر شنونده‌ای برمی‌گردد، پس چیزی برای مسابقه وجود ندارد.)
+_n12=_sc12.count('compareAndSet(false, true)')
+check('بخش۱۲ هر سه مسیرِ رقیب با compareAndSet محافظت شده‌اند',
+      _n12>=3, _n12)
+check('بخش۱۲ محافظ از AtomicBoolean است نه Boolean معمولی (مسابقهٔ نخ)',
+      'AtomicBoolean' in _sc12, '')
+check('بخش۱۲ دکمه‌های تأیید از کف ۴۸dp پروژه بزرگ‌ترند',
+      'dp(56)' in _sc12, '')
+check('بخش۱۲ hide() کارت تأیید را هم می‌بندد (کارت یتیم نمی‌ماند)',
+      'dismissConfirm()' in _oc12[:_oc12.find('fun showConfirm')] or
+      _oc12.count('dismissConfirm()')>=3, _oc12.count('dismissConfirm()'))
+
+# قالب‌بندی پارامتر
+_st12=open(os.path.join(KT,'ScreenTask.kt'),encoding='utf-8').read()
+check('بخش۱۲ قالب {{نام}} در payload جای‌گذاری می‌شود',
+      'PARAM_RE' in _st12 and 'payload = fill(' in _st12, '')
+check('بخش۱۲ expect هم قالب‌گذاری می‌شود (نه فقط payload)', 'expect = fill(' in _st12, '')
+check('بخش۱۲ پارامتر گم‌شده کار را رد می‌کند نه اینکه قالب خام اجرا شود',
+      'missing.isNotEmpty()) null' in _st12, '')
+check('بخش۱۲ requiredParams برای پرسیدن از سالمند در دسترس است',
+      'fun requiredParams(' in _st12, '')
+check('بخش۱۲ رسپی اسنپ مقصد ثابت ندارد',
+      'خیابان ولیعصر' not in _dbsrc and '{{destination}}' in _dbsrc, '')
+check('بخش۱۲ رسپی اسنپ‌فود کالای ثابت ندارد',
+      'شیر کم‌چرب' not in _dbsrc and '{{item}}' in _dbsrc, '')
 
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)
