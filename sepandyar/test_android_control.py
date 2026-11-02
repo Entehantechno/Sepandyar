@@ -24,7 +24,9 @@ pkgs={x['package'] for x in items}
 check('اسنپ‌فود و اسنپ و کروم در فهرست‌اند',{'com.snappfood','cab.snapp.passenger','com.android.chrome'}<=pkgs,pkgs)
 bad=[x['package'] for x in items if not ((x.get('plan') or {}).get('steps'))]
 check('همه اپ‌ها برنامه گام دارند',not bad,bad)
-STEP_TYPES={'launch','wait','tap_text','input_text','tap_xy','back','home','recents','scroll'}
+STEP_TYPES={'launch','wait','tap_text','tap_id','input_text','ime_enter','submit',
+            'long_click','tap_xy','swipe','back','home','recents','notifications',
+            'quick_settings','power_dialog','lock_screen','screenshot','scroll'}
 unknown=[(x['package'],st.get('type')) for x in items for st in (x['plan'] or {}).get('steps',[]) if st.get('type') not in STEP_TYPES]
 check('همه نوع گام‌ها معتبرند',not unknown,unknown)
 check('گام‌های لمس/ورودی متن دارای payload هستند',all(st.get('payload') for x in items for st in (x['plan'] or {}).get('steps',[]) if st['type'] in ('tap_text','input_text')),'')
@@ -290,6 +292,71 @@ check('بخش۸ web.url مستقیماً از نخ پل خوانده نمی‌ش
 check('بخش۸ mixedContentMode صریحاً NEVER_ALLOW است',
       'mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW' in main,
       'صفحه https است؛ http غیر-loopback به‌عنوان محتوای مختلط مسدود می‌شود')
+
+print('--- 9) مجموعهٔ کامل گام‌های کنترل صفحه (مرحلهٔ ۲۲) ---')
+# پیش از این performStep فقط ۹ نوع گام می‌شناخت و شش عملیات پایه را اصلاً
+# نداشت. مهم‌ترینشان ACTION_IME_ENTER بود: بدون آن هیچ رسپی‌ای نمی‌توانست
+# یک جست‌وجو را «ارسال» کند و رسپی کروم قطعاً خراب بود.
+NEW_STEPS=['tap_id','ime_enter','submit','long_click','swipe','notifications',
+           'quick_settings','power_dialog','lock_screen','screenshot']
+_missing=[t for t in NEW_STEPS if '"%s"'%t not in svc]
+check('بخش۹ همهٔ گام‌های تازه در performStep هستند', not _missing, _missing)
+check('بخش۹ ACTION_IME_ENTER استفاده می‌شود', 'ACTION_IME_ENTER' in svc, '')
+check('بخش۹ ACTION_LONG_CLICK استفاده می‌شود', 'ACTION_LONG_CLICK' in svc, '')
+check('بخش۹ ژست کشیدن مسیر دونقطه‌ای می‌سازد (moveTo + lineTo)',
+      'moveTo(x1, y1); lineTo(x2, y2)' in svc, '')
+check('بخش۹ ضربهٔ طولانی مدت بلندتری از ضربهٔ معمولی دارد',
+      'LONG_PRESS_MS = 600L' in svc and 'StrokeDescription(path, 0, 80)' in svc, '')
+
+# نگهبان نسخه: minSdk=26 است ولی ACTION_IME_ENTER از API 30 و
+# GLOBAL_ACTION_LOCK_SCREEN / TAKE_SCREENSHOT از API 28 هستند.
+# بدون این نگهبان‌ها روی اندروید ۸ تا ۱۰ خطای زمان اجرا می‌داد.
+check('بخش۹ IME_ENTER پشت نگهبان API 30 است',
+      'Build.VERSION.SDK_INT >= 30' in svc, '')
+check('بخش۹ lock_screen پشت نگهبان API 28 است',
+      'GLOBAL_ACTION_LOCK_SCREEN) else false' in svc and 'SDK_INT >= 28' in svc, '')
+check('بخش۹ screenshot پشت نگهبان API 28 است',
+      'GLOBAL_ACTION_TAKE_SCREENSHOT) else false' in svc, '')
+check('بخش۹ Build برای نگهبان‌ها import شده',
+      'import android.os.Build' in svc, '')
+
+# تصمیم اخلاقی: تصویر گرفتن «بی‌صدا» روی گوشی سالمند پذیرفتنی نیست.
+# AccessibilityService.takeScreenshot (API 30) هیچ اعلان/نمایشگری ندارد؛
+# عمداً استفاده نمی‌شود و این سنجش جلوی بازگشت ناخواسته‌اش را می‌گیرد.
+# توجه: این سنجش باید روی متنِ «بی‌کامنت» اجرا شود. در ScreenControlService
+# یک کامنت هست که توضیح می‌دهد چرا از takeScreenshot استفاده «نمی‌کنیم»؛
+# بدون حذف کامنت، همان توضیح به‌شکل استفاده از آن خوانده می‌شد.
+_svc_code=strip_kotlin(svc)
+check('بخش۹ takeScreenshot بی‌صدا عمداً استفاده نشده (حریم سالمند)',
+      'takeScreenshot(' not in _svc_code, 'takeScreenshot در کد پیدا شد')
+check('بخش۹ مسیر جایگزین imeEnter برچسب‌های ارسال دارد',
+      'SUBMIT_LABELS' in svc and 'جست‌وجو' in svc, '')
+
+# هر گام تازه باید برچسب فارسی روی overlay داشته باشد، وگرنه سالمند
+# «در حال اجرا» می‌بیند و نمی‌فهمد چه اتفاقی دارد می‌افتد.
+_nolabel=[t for t in ['tap_id','ime_enter','long_click','swipe','notifications',
+                      'quick_settings','power_dialog','lock_screen','screenshot']
+          if '"%s"'%t not in runner]
+check('بخش۹ همهٔ گام‌های تازه برچسب فارسی overlay دارند', not _nolabel, _nolabel)
+
+# رگرسیونِ خودِ باگ: هیچ رسپی‌ای نباید input_text را بی‌واسطه به tap_text
+# برساند، چون در هر UI ای که نیازمند ارسال صریح است، گام بعد هرگز پیدا
+# نمی‌شود و تا timeout تلاش و سپس شکست می‌خورد.
+import json as _json22, re as _re22
+_dbsrc=open(os.path.join(ROOT,'app','database.py'),encoding='utf-8').read()
+_recipes=_re22.findall(r"\[\{'type':'wait'.*?\}\]", _dbsrc)
+check('بخش۹ رسپی‌های پیش‌فرض پیدا شدند', len(_recipes)>=3, len(_recipes))
+_badseq=[]
+for _r in _recipes:
+    _types=_re22.findall(r"'type':'(\w+)'", _r)
+    for _i in range(len(_types)-1):
+        if _types[_i]=='input_text' and _types[_i+1]=='tap_text':
+            _badseq.append(_types)
+check('بخش۹ هیچ رسپی‌ای input_text را بی‌واسطه به tap_text نمی‌رساند',
+      not _badseq, _badseq)
+check('بخش۹ هر سه رسپی گام ارسال (ime_enter) دارند',
+      sum(1 for _r in _recipes if "'ime_enter'" in _r)>=3,
+      sum(1 for _r in _recipes if "'ime_enter'" in _r))
 
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)
