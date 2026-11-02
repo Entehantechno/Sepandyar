@@ -397,6 +397,33 @@ const _bridge=window.SepandyarNative&&(_web?window.SepandyarNative.runWebTask:wi
 screenRunState={plan:plan,done:0,cancelled:false,web:_web,native:!!_bridge};
 if(screenRunState.native){showScreenOverlay('در حال باز کردن '+app.label,'سپندیار کنترل را به دست گرفت',0,plan.steps.length);const started=_bridge(JSON.stringify(plan));if(!started){hideScreenOverlay();speakBack(_web?'این سرویس هنوز روی این دستگاه آماده نشده است.':'اجرای کار ممکن نشد؛ شاید کار دیگری در جریان است.');return}closeModal();speakBack('دارم '+app.label+' را باز می‌کنم. کارت کوچک روی صفحه را می‌بینید و هر وقت خواستید لغو کنید.');return}closeModal();simulateScreenRun(plan,app)}
 function simulateScreenRun(plan,app){let i=0;const total=(plan.steps||[]).length;showScreenOverlay('در حال باز کردن '+app.label,'اجرای نمایشی در مرورگر',0,total);speakBack('دارم '+app.label+' را باز می‌کنم.');const tick=()=>{if(!screenRunState||screenRunState.cancelled){hideScreenOverlay();screenRunState=null;speakBack('کار لغو شد.');return}if(i>=total){hideScreenOverlay();screenRunState=null;speakBack('کار «'+app.label+'» انجام شد و به سپندیار برگشتیم.');reportScreenRun(plan,'done',total,'');return}const st=plan.steps[i];showScreenOverlay(stepLabel(st.type),st.payload||'',i,total);i++;if(screenRunState)screenRunState.done=i;setTimeout(tick,1400)};setTimeout(tick,1200)}
+/*
+  لایهٔ ۳ معماری دستیارها: Assistant یک «قابلیت اعلام‌شده» را با پارامترِ
+  از قبل استخراج‌شده به ما می‌دهد. اینجا هیچ خراشیدن UI ای نیست — Assistant
+  جملهٔ سالمند را فهمیده و ما فقط به بخش درست می‌رویم.
+
+  دو نکتهٔ صادقانه:
+   - نام پارامترِ برگ برای CREATE_TAXI_RESERVATION راستی‌آزمایی نشده، پس
+     Assistant «مقصد» را نمی‌دهد. به‌جای وانمود کردن به اینکه فهمیدیم،
+     مقصد را از خودِ سالمند می‌پرسیم.
+   - ناشناخته‌ها بی‌صدا نادیده گرفته نمی‌شوند: بازخورد صوتی می‌دهیم تا
+     سالمند نفهمد چیزی نشنیده شد.
+*/
+var APP_ACTION_LABELS={meds:'داروهای شما',vitals:'علائم حیاتی',wallet:'کیف پول',settings:'تنظیمات مراقب'};
+window.onAppAction=function(a){
+  if(!a)return;
+  var f=String(a.feature||''),q=String(a.query||''),it=String(a.item||'');
+  if(f==='caregiver'){speakBack('چشم، دارم به مراقب شما زنگ می‌زنم.');try{requestCaregiverCall()}catch(e){toast('درخواست تماس ممکن نشد')}return}
+  if(f==='taxi'||f==='food_order'){
+    openScreenControl();
+    speakBack(f==='taxi'?'حتماً. کجا می‌روید؟ آدرس را بگویید.':'حتماً. چه چیزی می‌خواهید سفارش دهید؟');
+    return;
+  }
+  if(f){speakBack('چشم، '+(APP_ACTION_LABELS[f]||'این بخش')+' را باز کردم.');try{closeModal()}catch(e){}try{go(f)}catch(e){toast('این بخش باز نشد')}return}
+  if(q){speakBack('دربارهٔ «'+q+'» نگاه می‌کنم.');try{toast('جست‌وجو: '+q)}catch(e){}return}
+  if(it){speakBack('«'+it+'» را پیدا می‌کنم.');openScreenControl();return}
+  speakBack('متوجه شدم، ولی این کار را پیدا نکردم.');
+};
 window.onScreenTaskResult=function(res){hideScreenOverlay();if(res.status==='not_mapped'){screenRunState=null;speakBack('این سرویس هنوز روی این دستگاه آماده نشده است.');return}const plan=(screenRunState&&screenRunState.plan)||{package:res.package,title:res.title,steps:[]};screenRunState=null;if(res.status==='done'){speakBack('کار «'+res.title+'» انجام شد و به سپندیار برگشتیم.')}else if(res.status==='cancelled'){speakBack('کار لغو شد و به سپندیار برگشتیم.')}else{speakBack('کار ناتمام ماند. '+(res.error||''))}reportScreenRun(plan,res.status,res.steps_done||0,res.error||'')};
 /* ---- موتور صبر گفتاری ----
  پژوهش: دقت ASR با سن افت معنادار ندارد (WER ۶٫۲۴٪ در برابر ۶٫۰۱٪، بازه شامل صفر) اما نوبت‌گیری

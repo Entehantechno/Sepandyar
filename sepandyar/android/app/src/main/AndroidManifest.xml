@@ -9,7 +9,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <application android:theme="@style/AppTheme" android:label="سپندیار" android:usesCleartextTraffic="false" android:networkSecurityConfig="@xml/network_security_config" android:resizeableActivity="true">
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
+            <!-- لایهٔ ۳ معماری دستیارها: App Actions. بدون این meta-data،
+                 Assistant هرگز shortcuts.xml را نمی‌بیند و قابلیت‌ها
+                 بی‌صدا ثبت‌نشده می‌مانند.
+                 singleTop هم لازم است: Assistant اپِ باز را با intent تازه
+                 صدا می‌زند و بدون آن onNewIntent هرگز نمی‌آید. -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/><category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
             </intent-filter>

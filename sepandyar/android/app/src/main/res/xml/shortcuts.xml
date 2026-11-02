@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  لایهٔ ۳ از معماری چهارلایهٔ دستیارها: App Actions / built-in intents.
+
+  چرا این لایه و نه لایهٔ ۴ (خراشیدن UI با AccessibilityService)؟
+  چون دستیارهای واقعی در وهلهٔ اول «قابلیتِ اعلام‌شده» را صدا می‌زنند، نه
+  پیکسل‌ها را. Google Assistant جملهٔ سالمند را با مدل زبانی خودش — که
+  گوگل ساخته و نگه می‌دارد — به یک BII نگاشت می‌کند و پارامترها را
+  استخراج‌شده به ما می‌دهد. ما هیچ OCR، هیچ تشخیص دکمه و هیچ حدس
+  مختصاتی نمی‌زنیم.
+
+  چرا نه لایهٔ ۱ (AppFunctions)؟ چون به compileSdk 37 و Android 16+ نیاز
+  دارد و ما روی compileSdk 35 هستیم. این فایل طوری نوشته شده که روزِ
+  مهاجرت، همین قابلیت‌ها به @AppFunction تبدیل شوند — نگاشت یک‌به‌یک است.
+
+  هر capability «عمداً» یک intent بدون پارامتر لازم هم دارد: سند رسمی
+  می‌گوید برای هر capability یک fallback لازم است تا پرسش‌های مبهم هم
+  شکست نخورند. برای سالمند این حیاتی است — او جملهٔ کامل و استاندارد
+  نمی‌گوید.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- میان‌برهای ثابت: با نگه‌داشتن انگشت روی آیکون اپ و به‌صورت پیشنهاد
+         در Assistant دیده می‌شوند. برای سالمند یعنی بدون گفتن جملهٔ کامل
+         هم به کارش می‌رسد. -->
+    <shortcut android:shortcutId="meds"
+              android:shortcutShortLabel="@string/sc_meds_short"
+              android:shortcutLongLabel="@string/sc_meds_long">
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <extra android:name="sepandyar_feature" android:value="meds" />
+        </intent>
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE" />
+        <parameter-binding android:key="feature" android:value="meds" />
+    </shortcut>
+
+    <shortcut android:shortcutId="vitals"
+              android:shortcutShortLabel="@string/sc_vitals_short"
+              android:shortcutLongLabel="@string/sc_vitals_long">
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <extra android:name="sepandyar_feature" android:value="vitals" />
+        </intent>
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE" />
+        <parameter-binding android:key="feature" android:value="vitals" />
+    </shortcut>
+
+    <shortcut android:shortcutId="caregiver"
+              android:shortcutShortLabel="@string/sc_care_short"
+              android:shortcutLongLabel="@string/sc_care_long">
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <extra android:name="sepandyar_feature" android:value="caregiver" />
+        </intent>
+        <capability-binding android:key="actions.intent.OPEN_APP_FEATURE" />
+        <parameter-binding android:key="feature" android:value="caregiver" />
+    </shortcut>
+
+    <!-- ناوبری به یک بخش با صدا. feature از inline inventory بالا پر می‌شود. -->
+    <capability android:name="actions.intent.OPEN_APP_FEATURE">
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <parameter android:name="feature" android:key="sepandyar_feature" />
+        </intent>
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity" />
+    </capability>
+
+    <!-- جست‌وجوی درون‌برنامه‌ای. سند رسمی: اپ‌هایی که جست‌وجو دارند
+         «ملزم» به پیاده‌سازی GET_THING هستند. -->
+    <capability android:name="actions.intent.GET_THING">
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <parameter android:name="thing.name" android:key="sepandyar_query" />
+        </intent>
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity" />
+    </capability>
+
+    <!-- «فشار خونم را نشان بده» — مستقیم به صفحهٔ علائم حیاتی. -->
+    <capability android:name="actions.intent.GET_HEALTH_STATS">
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <extra android:name="sepandyar_feature" android:value="vitals" />
+        </intent>
+    </capability>
+
+    <!--
+      «برایم تاکسی بگیر» و «غذا سفارش بده».
+
+      این دو دقیقاً همان کاری‌اند که در مرحلهٔ ۲۴ سعی کردیم با خراشیدن UI
+      اپ اسنپ انجام دهیم. تفاوت: اینجا Assistant خودش مقصد/غذا را از جملهٔ
+      سالمند استخراج می‌کند و به ما Extra می‌دهد — بدون AccessibilityService،
+      پس نه مشمول سیاست دسترس‌پذیری Play است نه محدودیت Android 17.
+
+      **صادقانه:** نام دقیق پارامترِ برگ (leaf) برای CREATE_TAXI_RESERVATION
+      را از مرجع BII راستی‌آزمایی نکرده‌ام، پس این capability فعلاً فقط
+      fallback دارد و مقصد را از خودِ Assistant نمی‌گیرد. حدس زدنِ نام
+      پارامتر بدترین گزینه بود: build سبز می‌ماند و قابلیت بی‌صدا کار
+      نمی‌کرد. پیش از افزودن <parameter> باید نام از bii-index تأیید شود.
+      تا آن زمان، مقصد درون اپ از خودِ سالمند پرسیده می‌شود (askForParam).
+    -->
+    <capability android:name="actions.intent.CREATE_TAXI_RESERVATION">
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <extra android:name="sepandyar_feature" android:value="taxi" />
+        </intent>
+    </capability>
+
+    <capability android:name="actions.intent.ORDER_MENU_ITEM">
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <parameter android:name="menuItem.name" android:key="sepandyar_item" />
+            <extra android:name="sepandyar_feature" android:value="food_order" />
+        </intent>
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <extra android:name="sepandyar_feature" android:value="food_order" />
+        </intent>
+    </capability>
+
+    <!-- «به مراقبم زنگ بزن» -->
+    <capability android:name="actions.intent.CREATE_CALL">
+        <intent android:action="android.intent.action.VIEW"
+                android:targetPackage="ai.arena.sepandyar"
+                android:targetClass="ai.arena.sepandyar.MainActivity">
+            <extra android:name="sepandyar_feature" android:value="caregiver" />
+        </intent>
+    </capability>
+</shortcuts>

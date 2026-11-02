@@ -4,6 +4,10 @@ import json, os, re, sys, urllib.request, urllib.error
 BASE='http://127.0.0.1:4174'
 ROOT=os.path.dirname(os.path.abspath(__file__))
 KT=os.path.join(ROOT,'android','app','src','main','java','ai','arena','sepandyar')
+# ریشهٔ پروژهٔ اندروید. §۱۳ و §۱۴ هر دو به آن نیاز دارند (manifest،
+# res/xml، build.gradle.kts و دارایی assets) و تعریف نشده بود — همان
+# چیزی که باعث کرش خاموش و گزارش نادرست «۱۲۰۱ · ۰» شد.
+AND=os.path.join(ROOT,'android')
 def req(path,method='GET',data=None,headers=None):
  b=json.dumps(data,ensure_ascii=False).encode() if data is not None else None
  r=urllib.request.Request(BASE+path,method=method,data=b,headers={'Content-Type':'application/json',**(headers or {})})
@@ -829,11 +833,11 @@ check('بخش۱۳ هلپر DOM پس از هر ناوبری دوباره تزری
 # ۱۳٫۷) متدهای پل باید گارد مبدأ داشته باشند: addJavascriptInterface با هر
 # ناوبری باقی می‌ماند و صفحهٔ اسنپ هم می‌تواند SepandyarNative را صدا بزند.
 for _m13 in ('runWebTask','cancelWebTask'):
-    _i13=_ma.find('@JavascriptInterface fun %s'%_m13)
-    _seg13=_ma[_i13:_i13+240] if _i13>=0 else ''
+    _i13=main.find('@JavascriptInterface fun %s'%_m13)
+    _seg13=main[_i13:_i13+240] if _i13>=0 else ''
     check('بخش۱۳ %s گارد bridgeTrusted دارد'%_m13, 'bridgeTrusted' in _seg13, _seg13[:90])
 check('بخش۱۳ runWebTask بدون WebView مقداردهی‌نشده اجرا نمی‌شود',
-      '::web.isInitialized' in _ma[_ma.find('fun runWebTask'):_ma.find('fun runWebTask')+300], '')
+      '::web.isInitialized' in main[main.find('fun runWebTask'):main.find('fun runWebTask')+300], '')
 
 # ۱۳٫۸) رابط وب: مسیریابی، لغو، و پیام «آماده نیست»
 check('بخش۱۳ رابط بر اساس mode رسپی مسیر را انتخاب می‌کند',
@@ -845,6 +849,97 @@ check('بخش۱۳ وضعیت not_mapped پیام riêng دارد (نه «شکس�
 check('بخش۱۳ resپی وب url و selectors_verified را به موتور می‌فرستد',
       'plan.url=' in web and 'plan.selectors_verified=' in web, '')
 check('بخش۱۳ دارایی اندروید با رابط وب همگام است',
+      open(os.path.join(AND,'app/src/main/assets/index.html'),encoding='utf-8').read()==web, '')
+
+print('--- 14) لایهٔ ۳: App Actions / built-in intents ---')
+import xml.etree.ElementTree as ET
+_sc14p=os.path.join(AND,'app/src/main/res/xml/shortcuts.xml')
+check('بخش۱۴ shortcuts.xml وجود دارد', os.path.exists(_sc14p), _sc14p)
+_sc14=ET.parse(_sc14p).getroot()
+_A='{http://schemas.android.com/apk/res/android}'
+_caps14=[e.get(_A+'name') for e in _sc14.findall('capability')]
+_sh14=[e.get(_A+'shortcutId') for e in _sc14.findall('shortcut')]
+
+# ۱۴٫۱) نام BII باید از فهرست راستی‌آزمایی‌شده باشد.
+# ساختن نامِ جعلی دقیقاً همان باگی است که در رسپی اسنپ خوردیم: build سبز
+# می‌ماند، Assistant هیچ‌وقت تطبیق نمی‌دهد، و قابلیت بی‌صدا مرده است.
+BII14={'actions.intent.OPEN_APP_FEATURE','actions.intent.GET_THING',
+       'actions.intent.GET_HEALTH_STATS','actions.intent.RECORD_HEALTH_OBSERVATION',
+       'actions.intent.CREATE_TAXI_RESERVATION','actions.intent.ORDER_MENU_ITEM',
+       'actions.intent.CREATE_CALL','actions.intent.GET_FOOD_OBSERVATION'}
+_badbii=[c for c in _caps14 if c not in BII14]
+check('بخش۱۴ همهٔ capabilityها BII راستی‌آزمایی‌شده‌اند', not _badbii, _badbii)
+check('بخش۱۴ سنجش تهی نیست: حداقل ۵ capability اعلام شد', len(_caps14)>=5, _caps14)
+check('بخش۱۴ GET_THING هست (برای اپ دارای جست‌وجو الزامی است)',
+      'actions.intent.GET_THING' in _caps14, _caps14)
+
+# ۱۴٫۲) نام پارامترِ برگ هم باید راستی‌آزمایی‌شده باشد.
+# این مهم‌ترین گارد این بخش است: CREATE_TAXI_RESERVATION عمداً «بدون»
+# <parameter> اعلام شده چون نام برگش را از bii-index تأیید نکردم. اگر روزی
+# کسی نامی حدس بزند، این سنجش می‌گیردش.
+PARAM14={'feature','thing.name','menuItem.name'}
+_params14=[pr.get(_A+'name') for c in _sc14.findall('capability')
+           for i in c.findall('intent') for pr in i.findall('parameter')]
+_badpar=[x for x in _params14 if x not in PARAM14]
+check('بخش۱۴ هیچ نام پارامتر حدس‌زده‌ای اعلام نشده', not _badpar, _badpar)
+check('بخش۱۴ سنجش تهی نیست: دست‌کم یک پارامتر راستی‌آزمایی‌شده هست',
+      len(_params14)>=1, _params14)
+
+# ۱۴٫۳) سند رسمی: هر capability باید یک fallback بدون پارامتر لازم داشته
+# باشد، وگرنه پرسش‌های مبهم شکست می‌خورند. برای سالمند حیاتی است.
+_nofb=[c.get(_A+'name') for c in _sc14.findall('capability')
+       if not any(not i.findall('parameter') for i in c.findall('intent'))]
+check('بخش۱۴ هر capability یک intent بدون پارامتر لازم دارد', not _nofb, _nofb)
+
+# ۱۴٫۴) registration: بدون meta-data، Assistant فایل را هرگز نمی‌بیند.
+_mf14=open(os.path.join(AND,'app/src/main/AndroidManifest.xml'),encoding='utf-8').read()
+check('بخش۱۴ shortcuts.xml در manifest ثبت شده',
+      'android.app.shortcuts' in _mf14 and '@xml/shortcuts' in _mf14, '')
+# singleTop لازم است وگرنه onNewIntent هرگز نمی‌آید و قابلیت فقط وقتی اپ
+# بسته است کار می‌کند.
+check('بخش۱۴ MainActivity singleTop است (تا onNewIntent برسد)',
+      'android:launchMode="singleTop"' in _mf14, '')
+check('بخش۱۴ وابستگی androidx.core هست (پیش‌نیاز رسمی shortcuts.xml)',
+      'androidx.core:core:' in open(os.path.join(AND,'app/build.gradle.kts'),encoding='utf-8').read(), '')
+
+# ۱۴٫۵) قرارداد کلید Extra باید در هر دو سمت یکی باشد. این همان باگی است
+# که در مرحلهٔ ۲۵ برای بسته‌ها داشتیم: یک لایه درست، لایهٔ دیگر کهنه.
+_keys14=sorted({e.get(_A+'name') for c in _sc14.iter() for e in c.findall('extra') if e.get(_A+'name')})
+_pkeys14=sorted({pr.get(_A+'key') for c in _sc14.iter() for pr in c.findall('parameter') if pr.get(_A+'key')})
+_all14=set(_keys14)|set(_pkeys14)
+_missing14=[k for k in _all14 if '"%s"'%k not in main]
+check('بخش۱۴ هر کلید Extra در MainActivity هم خوانده می‌شود', not _missing14, _missing14)
+check('بخش۱۴ سنجش تهی نیست: دست‌کم ۲ کلید Extra استخراج شد', len(_all14)>=2, sorted(_all14))
+
+# ۱۴٫۶) capability-binding باید به capability اعلام‌شده اشاره کند
+_badbind=[b.get(_A+'key') for sc in _sc14.findall('shortcut')
+          for b in sc.findall('capability-binding') if b.get(_A+'key') not in _caps14]
+check('بخش۱۴ هر capability-binding به capability موجود اشاره می‌کند', not _badbind, _badbind)
+# parameter-binding باید پارامتری باشد که آن capability واقعاً اعلام کرده
+_cap_par14={c.get(_A+'name'):{pr.get(_A+'name') for i in c.findall('intent')
+            for pr in i.findall('parameter')} for c in _sc14.findall('capability')}
+_badpb=[(sc.get(_A+'shortcutId'),b.get(_A+'key'),pb.get(_A+'key'))
+        for sc in _sc14.findall('shortcut') for b in sc.findall('capability-binding')
+        for pb in sc.findall('parameter-binding')
+        if pb.get(_A+'key') not in _cap_par14.get(b.get(_A+'key'),set())]
+check('بخش۱۴ هر parameter-binding پارامترِ واقعیِ همان capability است', not _badpb, _badpb)
+_labels14=[sc.get(_A+'shortcutShortLabel') for sc in _sc14.findall('shortcut')]
+check('بخش۱۴ برچسب میان‌برها منبع رشته‌اند نه متن خام',
+      all(l and l.startswith('@string/') for l in _labels14), _labels14)
+_str14=open(os.path.join(AND,'app/src/main/res/values/strings.xml'),encoding='utf-8').read()
+_missingstr=[l.split('/')[-1] for l in _labels14 if ('name="%s"'%l.split('/')[-1]) not in _str14]
+check('بخش۱۴ همهٔ رشته‌های برچسب تعریف شده‌اند', not _missingstr, _missingstr)
+
+# ۱۴٫۷) سمت رابط وب
+check('بخش۱۴ onAppAction در رابط وب هست', 'window.onAppAction' in web, '')
+check('بخش۱۴ onAppAction ناشناخته را بی‌صدا نمی‌بلعد',
+      'پیدا نکردم' in web[web.find('window.onAppAction'):web.find('window.onAppAction')+1800], '')
+check('بخش۱۴ MainActivity intent را به onAppAction می‌فرستد',
+      'window.onAppAction' in main and 'fun consumeAppAction' in main, '')
+check('بخش۱۴ onNewIntent پیاده شده', 'override fun onNewIntent' in main, '')
+check('بخش۱۴ هیچ خراشیدن UI در مسیر App Actions نیست',
+      'AccessibilityService' not in main[main.find('fun consumeAppAction'):main.find('fun consumeAppAction')+1200], '')
+check('بخش۱۴ دارایی اندروید با onAppAction همگام است',
       open(os.path.join(AND,'app/src/main/assets/index.html'),encoding='utf-8').read()==web, '')
 
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')

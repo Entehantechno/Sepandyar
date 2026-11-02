@@ -114,6 +114,8 @@ class MainActivity : Activity() {
         setContentView(web)
         // نتیجه هر کار کنترل صفحه به رابط وب برمی‌گردد
         ScreenTaskRunner.onResult = { result -> reportTaskResult(result) }
+        // ممکن است Assistant اپ را با یک intent قابلیت باز کرده باشد.
+        consumeAppAction(intent)
         /*
          * POST_NOTIFICATIONS هم درخواست می‌شود: از اندروید ۱۳ به بعد بدون آن،
          * اعلانِ سرویس پیش‌زمینه نشان داده نمی‌شود و سالمند هیچ نشانه‌ای از
@@ -306,6 +308,48 @@ class MainActivity : Activity() {
             return try { ScreenControlService.instance?.captureForVision() ?: "" } catch (e: Exception) { "" }
         }
         @JavascriptInterface fun bringAppToFront() { if (!bridgeTrusted) return; runOnUiThread { returnFromOverlay() } }
+    }
+
+    /**
+     * Assistant اپِ باز را با intent تازه صدا می‌زند؛ بدون onNewIntent و
+     * بدون launchMode="singleTop" آن intent هرگز به دست ما نمی‌رسید و
+     * قابلیت فقط در حالت «اپ بسته بود» کار می‌کرد.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeAppAction(intent)
+    }
+
+    /**
+     * لایهٔ ۳ معماری چهارلایهٔ دستیارها: App Actions / built-in intents.
+     *
+     * اینجا **هیچ خراشیدن UI ای نیست**. Assistant جملهٔ سالمند را با مدل
+     * زبانیِ خودش — که گوگل می‌سازد و نگه می‌دارد — به یک built-in intent
+     * نگاشت کرده و پارامترها را «استخراج‌شده» به ما داده است. ما نه OCR
+     * می‌زنیم، نه دکمه حدس می‌زنیم، نه مختصات. و چون از AccessibilityService
+     * استفاده نمی‌کنیم، مشمول سیاست دسترس‌پذیری Play (اجرایی ۲۸ ژانویهٔ
+     * ۲۰۲۶) و محدودیت Android 17 Advanced Protection هم نیستیم.
+     *
+     * تأخیر ۹۰۰ms عمدی است: صفحه هنوز در حال بارگذاری است و اگر زود
+     * evaluateJavascript بزنیم، onAppAction هنوز تعریف نشده و فراخوانی
+     * «بی‌صدا» گم می‌شود — سالمند هیچ بازخوردی نمی‌گیرد.
+     */
+    private fun consumeAppAction(intent: Intent?) {
+        val feature = intent?.getStringExtra("sepandyar_feature")
+        val query = intent?.getStringExtra("sepandyar_query")
+        val item = intent?.getStringExtra("sepandyar_item")
+        if (feature.isNullOrBlank() && query.isNullOrBlank() && item.isNullOrBlank()) return
+        val payload = org.json.JSONObject().apply {
+            put("feature", feature ?: "")
+            put("query", query ?: "")
+            put("item", item ?: "")
+        }
+        val quoted = org.json.JSONObject.quote(payload.toString())
+        if (!::web.isInitialized) return
+        web.postDelayed({
+            web.evaluateJavascript("window.onAppAction && window.onAppAction(JSON.parse($quoted))", null)
+        }, 900)
     }
 
     /** نتیجه کار را به جاوااسکریپت داخل WebView برمی‌گرداند. */

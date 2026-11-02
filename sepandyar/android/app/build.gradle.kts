@@ -13,4 +13,7 @@ dependencies {
     // WebViewAssetLoader: سرو کردن دارایی‌ها روی مبدأ https مجازی تا زمینهٔ امن
     // (میکروفون، service worker و fetch) در دسترس باشد.
     implementation("androidx.webkit:webkit:1.12.1")
+    // سند رسمی App Actions: برای تعریف capability در shortcuts.xml به
+    // androidx.core >= 1.6.0 نیاز است، وگرنه خطای کامپایل می‌گیرد.
+    implementation("androidx.core:core:1.13.1")
 }
