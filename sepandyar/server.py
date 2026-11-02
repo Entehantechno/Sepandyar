@@ -18,7 +18,7 @@ import os as _os, sys as _sys
 _HERE=_os.path.dirname(_os.path.abspath(__file__))
 if _HERE not in _sys.path: _sys.path.insert(0,_HERE)
 
-from app.caregiver import enqueue_caregiver_action,open_alert,open_alert_once,consent_granted,mask_phone,new_invite_code,caregiver_session,primary_caregiver
+from app.caregiver import CONSENT_SCOPES,enqueue_caregiver_action,open_alert,open_alert_once,consent_granted,mask_phone,new_invite_code,caregiver_session,primary_caregiver
 from app.clock import now,LOCAL_TZ,local_now
 from app.clock import _tehran_tz
 from app.config import ROOT,DB,ROOT,DB,MAX_BODY_BYTES
@@ -52,6 +52,19 @@ __all__=[n for n in dir() if not n.startswith("__")]
 if __name__=='__main__':
  import threading
  from http.server import ThreadingHTTPServer
+
+ class Server(ThreadingHTTPServer):
+  """تنظیمات پذیرش اتصال.
+
+  request_queue_size پیش‌فرض socketserver برابر ۵ است. با ۶۰ اتصال همزمان،
+  اتصالات مازاد در صف accept جا نمی‌شدند و کارنوِل آن‌ها دور می‌ریخت؛ کلاینت
+  بعد از ~۱۰۰۰ms بازفرستی SYN می‌کرد. این دقیقاً همان چیزی بود که در
+  اندازه‌گیری به‌صورت max≈۱۲۰۰ms دیده می‌شد در حالی که p50 تنها ۸ms بود.
+  """
+  request_queue_size=128
+  allow_reuse_address=True
+  daemon_threads=True
+
  threading.Thread(target=scheduler_loop,daemon=True).start()
  print('Sepandyar API listening on 0.0.0.0:4174')
- ThreadingHTTPServer(('0.0.0.0',4174),Handler).serve_forever()
+ Server(('0.0.0.0',4174),Handler).serve_forever()

@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, quote, unquote, parse_qs
 
-from .caregiver import caregiver_session,consent_granted,enqueue_caregiver_action,mask_phone,new_invite_code,open_alert,primary_caregiver
+from .caregiver import CONSENT_SCOPES,caregiver_session,consent_granted,enqueue_caregiver_action,mask_phone,new_invite_code,open_alert,primary_caregiver
 from .clock import local_now,now
 from .config import MAX_BODY_BYTES,ROOT
 from .database import db
@@ -45,6 +45,10 @@ class Handler(SimpleHTTPRequestHandler):
  # ۳۰ ثانیه با فاصلهٔ امن بالای کُندترین مسیر مشروع است (پروکسی Gemini
  # تایم‌اوت ۱۵ ثانیه دارد).
  timeout=30
+ # پاسخ‌های ما JSON کوچک است. با Nagle فعال، نوشتن‌های کوچکِ پیاپی (سرآیند و
+ # بدنه جدا) می‌توانند تا تأیید بستهٔ پیشین نگه داشته شوند و چند ده میلی‌ثانیه
+ # به هر پاسخ اضافه کنند. برای پاسخ کوتاه، خاموش کردنش سود خالص است.
+ disable_nagle_algorithm=True
  # تنها نقطهٔ گلوگاهی مشترک «همهٔ» پاسخ‌ها: send() برای JSON، send_error() برای خطاها،
  # و send_head() ارثی برای فایل‌های ایستا همگی از end_headers می‌گذرند؛ پس هیچ مسیری
  # جا نمی‌ماند. (همان درسی که در دور یازدهم از do_HEAD گرفتیم: گلوگاه را پایین بگیر.)
@@ -105,7 +109,7 @@ class Handler(SimpleHTTPRequestHandler):
    self.end_headers()
    self.wfile.write(raw)
    return
-  if p=='/api/vitals/shares': return send(self,200,{'items':rows(c,'SELECT token,scope,expires_at,revoked,created_at FROM shares ORDER BY created_at DESC')})
+  if p=='/api/vitals/shares': return send(self,200,{'items':rows(c,'SELECT token,scope,expires_at,revoked,created_at FROM shares ORDER BY created_at DESC LIMIT 200')})
   if p.startswith('/api/vitals/share/'):
    data=share_payload(c,p.split('/')[-1]); return send(self,200,data) if data else send(self,404,{'error':'share_not_found'})
   if p=='/api/health': return send(self,200,{'ok':True,'service':'sepandyar','time':now(),'version':'0.2'})
@@ -168,9 +172,9 @@ class Handler(SimpleHTTPRequestHandler):
    alerts=rows(c,"SELECT id,type,message,severity,status,created_at FROM alerts WHERE status='open' ORDER BY created_at DESC LIMIT 20")
    vit=c.execute("SELECT type,value,measured_at FROM vitals ORDER BY measured_at DESC LIMIT 1").fetchone()
    return send(self,200,{'profile':dict(prof) if prof else {},'medications':meds,'open_alerts':alerts,'last_vital':dict(vit) if vit else None,'caregivers':rows(c,'SELECT name,phone,role FROM caregivers'),'tasks':rows(c,"SELECT * FROM care_tasks WHERE status!='done' ORDER BY due_at"),'last_checkin':dict(c.execute('SELECT * FROM checkins ORDER BY created_at DESC LIMIT 1').fetchone()) if c.execute('SELECT COUNT(*) FROM checkins').fetchone()[0] else None})
-  if p=='/api/care-tasks': return send(self,200,{'items':rows(c,'SELECT * FROM care_tasks ORDER BY due_at')})
+  if p=='/api/care-tasks': return send(self,200,{'items':rows(c,'SELECT * FROM care_tasks ORDER BY due_at LIMIT 200')})
   if p=='/api/checkins': return send(self,200,{'items':rows(c,'SELECT * FROM checkins ORDER BY created_at DESC LIMIT 30')})
-  if p=='/api/icope': return send(self,200,{'items':rows(c,'SELECT * FROM icope_assessments ORDER BY assessed_at DESC')})
+  if p=='/api/icope': return send(self,200,{'items':rows(c,'SELECT * FROM icope_assessments ORDER BY assessed_at DESC LIMIT 100')})
   if p=='/api/icope/summary':
    domains=['locomotion','vitality','vision','hearing','cognition','psychology']; latest={}
    for d in domains:
@@ -180,7 +184,7 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/pantry': return send(self,200,{'items':rows(c,'SELECT * FROM food_items ORDER BY created_at DESC')})
   if p=='/api/contacts': return send(self,200,{'items':rows(c,'SELECT * FROM contacts ORDER BY name')})
   if p=='/api/messages': return send(self,200,{'items':rows(c,'SELECT * FROM messages ORDER BY created_at DESC LIMIT 50')})
-  if p=='/api/appointments': return send(self,200,{'items':rows(c,'SELECT * FROM appointments WHERE status=\'scheduled\' ORDER BY starts_at')})
+  if p=='/api/appointments': return send(self,200,{'items':rows(c,'SELECT * FROM appointments WHERE status=\'scheduled\' ORDER BY starts_at LIMIT 200')})
   if p=='/api/doctors': return send(self,200,{'items':rows(c,'SELECT * FROM doctors ORDER BY preferred DESC,specialty')})
   if p=='/api/emergency-card':
    r=c.execute('SELECT * FROM emergency_card WHERE id=1').fetchone(); return send(self,200,dict(r) if r else {})
@@ -230,7 +234,7 @@ class Handler(SimpleHTTPRequestHandler):
   if p=='/api/education/topics': return send(self,200,{'items':rows(c,"SELECT id,topic,category,approved_by FROM education_content WHERE status='approved' ORDER BY category,topic")})
   if p=='/api/education/next':
    it=rows(c,"SELECT id,topic,category,body,approved_by FROM education_content WHERE status='approved' ORDER BY RANDOM() LIMIT 1"); return send(self,200,{'item':it[0] if it else None})
-  if p=='/api/education': return send(self,200,{'items':rows(c,'SELECT * FROM education_content ORDER BY category,topic')})
+  if p=='/api/education': return send(self,200,{'items':rows(c,'SELECT * FROM education_content ORDER BY category,topic LIMIT 300')})
   if p.startswith('/api/education/'):
    r=c.execute("SELECT * FROM education_content WHERE id=? AND status='approved'",(p.split('/')[3],)).fetchone()
    return send(self,200,dict(r)) if r else send(self,404,{'error':'content_not_found_or_not_approved'})
@@ -348,7 +352,7 @@ class Handler(SimpleHTTPRequestHandler):
    if not caregiver_session(c,self.headers): return send(self,403,{'error':'caregiver_session_required','message':'برای این بخش ابتدا با شماره و کد دعوت مراقب وارد شوید.'})
   if p=='/api/consents':
    scope=d.get('scope','');
-   if scope not in ('health','wallet','screen_control','voice_profile','emergency_call'): return send(self,400,{'error':'invalid_scope'})
+   if scope not in CONSENT_SCOPES: return send(self,400,{'error':'invalid_scope'})
    c.execute('INSERT INTO consents(scope,granted,confirmed_by_voice,updated_at,updated_by) VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET granted=excluded.granted,confirmed_by_voice=excluded.confirmed_by_voice,updated_at=excluded.updated_at,updated_by=excluded.updated_by',(scope,int(bool(d.get('granted'))),int(bool(d.get('confirmed_by_voice'))),now(),d.get('updated_by','senior')))
    c.commit()
    return send(self,200,{'ok':True})

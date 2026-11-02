@@ -1439,10 +1439,111 @@ for _p,_exp in [('journal_mode','wal'),('synchronous',1),('busy_timeout',15000),
     check('بخش۲۱ PRAGMA %s == %r'%(_p,_exp), _got==_exp, 'به‌دست‌آمده: %r'%(_got,))
 check('بخش۲۱ فایل -wal واقعاً ساخته می‌شود', os.path.exists(_m14.DB+'-wal') or _pc.execute('PRAGMA journal_mode').fetchone()[0]=='wal')
 # پژوهش: PRAGMA ها باید «پیش از هر BEGIN/کوئری» اعمال شوند؛ اگر بعد از executescript باشند بی‌اثرند.
-_q3=chr(39)*3
-_i_j=srvsrc.find(chr(80)+"RAGMA journal_mode"); _i_s=srvsrc.find("c.executescript("+_q3+"CREATE TABLE")
-check('بخش۲۱ PRAGMA در متن کد پیدا می‌شود', _i_j>=0 and _i_s>=0, (_i_j,_i_s))
-check('بخش۲۱ PRAGMA ها پیش از executescript اسکیم اجرا می‌شوند', 0<=_i_j<_i_s, (_i_j,_i_s))
+# پیش‌تر این سنجش موقعیت دو رشته را در «کل متن فایل» مقایسه می‌کرد. با تفکیک
+# _bootstrap() از db() آن مقایسه بی‌معنا شد (تابع bootstrap حالا بالای db
+# تعریف می‌شود) در حالی که ترتیب واقعیِ اجرا درست مانده است. پس حالا ترتیب را
+# درونِ خودِ بدنهٔ db() می‌سنجیم — همان مسیر فراخوانی که واقعاً اجرا می‌شود.
+import inspect as _insp
+_dbsrc=_insp.getsource(_m14.db)
+_i_boot=_dbsrc.find('_bootstrap(c)')
+_i_jm=_dbsrc.find('PRAGMA journal_mode'); _i_sy=_dbsrc.find('PRAGMA synchronous')
+check('بخش۲۱ PRAGMA و نقطهٔ بوت‌استرپ در db() پیدا می‌شوند',
+      _i_jm>=0 and _i_sy>=0 and _i_boot>=0, (_i_jm,_i_sy,_i_boot))
+check('بخش۲۱ journal_mode پیش از بوت‌استرپ اسکیم اعمال می‌شود', 0<=_i_jm<_i_boot, (_i_jm,_i_boot))
+check('بخش۲۱ synchronous پیش از بوت‌استرپ اسکیم اعمال می‌شود', 0<=_i_sy<_i_boot, (_i_sy,_i_boot))
+
+# --- بوت‌استرپ یک‌بارمصرف (گلوگاه اصلی مقیاس‌پذیری، مرحلهٔ ۲۱) ---
+# پیش‌تر db() در «هر» درخواست ~۱۲۰ دستور INSERT OR IGNORE، یک DELETE
+# بی‌قیدوشرط و CREATE INDEX اجرا می‌کرد؛ همه قفل نوشتن انحصاری می‌گیرند و
+# درخواست‌ها را سریال می‌کردند (p50=۱۰۱۹ms زیر ۶۰ درخواست همزمان).
+# این سنجش رفتاری است نه متنی: executescript را می‌شمارد.
+_m14.db().close()   # گرم‌کردن؛ بوت‌استرپ یک‌بارمصرف همین‌جا انجام می‌شود
+# توجه: sqlite3.Connection یک نوع C تغییرناپذیر است و نمی‌توان executescript
+# را رویش وصله کرد (TypeError: cannot set attribute of immutable type). پس
+# خودِ _bootstrap را می‌شماریم که دقیقاً همان نیت است.
+import sys as _sys21
+_adb=_sys21.modules[_m14.db.__module__]
+_bs_calls=[]; _orig_bs=_adb._bootstrap
+def _counted_bs(c):
+    _bs_calls.append(1); return _orig_bs(c)
+_adb._bootstrap=_counted_bs
+try:
+    for _ in range(5): _m14.db().close()
+finally:
+    _adb._bootstrap=_orig_bs
+check('بخش۲۱ بوت‌استرپ در ۵ فراخوانی db() هیچ‌وقت دوباره اجرا نمی‌شود',
+      len(_bs_calls)==0, '_bootstrap %d بار دیگر اجرا شد'%len(_bs_calls))
+check('بخش۲۱ نگهبان بوت‌استرپ یک‌بارمصرف وجود دارد',
+      all(hasattr(_adb,n) for n in ('_BOOTED','_BOOT_LOCK','_bootstrap')),
+      [n for n in ('_BOOTED','_BOOT_LOCK','_bootstrap') if not hasattr(_adb,n)])
+check('بخش۲۱ پس از بوت‌استرپ، پرچم یک‌بارمصرف برقرار است',
+      getattr(_adb,'_BOOTED',False) is True, getattr(_adb,'_BOOTED','MISSING'))
+
+# --- بخش۲۲: رضایت سمت سرور و سازگاری آن با رابط کاربری (مرحلهٔ ۲۱) ---
+# پیش از این چهار سوییچ حریم خصوصی در رابط کاربری فقط localStorage را
+# می‌نوشتند و هرگز به /api/consents نمی‌رسیدند، در حالی که consent_granted
+# سه endpoint مراقب را قفل می‌کند. یعنی کنترل کاربر تشریفاتی بود.
+_sc22, _bd22 = req(BASE, '/api/consents', 'POST', {'scope':'vitals','granted':True,'updated_by':'senior'})
+check('بخش۲۲ scope تازهٔ vitals پذیرفته می‌شود', _sc22==200, (_sc22,_bd22))
+_sc22, _bd22 = req(BASE, '/api/consents', 'POST', {'scope':'medications','granted':True,'updated_by':'senior'})
+check('بخش۲۲ scope تازهٔ medications پذیرفته می‌شود', _sc22==200, (_sc22,_bd22))
+_sc22, _bd22 = req(BASE, '/api/consents', 'POST', {'scope':'location','granted':False,'updated_by':'senior'})
+check('بخش۲۲ scope تازهٔ location پذیرفته می‌شود', _sc22==200, (_sc22,_bd22))
+# گسترش فهرست نباید اعتبارسنجی را از کار بیندازد
+_sc22, _bd22 = req(BASE, '/api/consents', 'POST', {'scope':'totally_made_up','granted':True})
+check('بخش۲۲ scope نامعتبر همچنان با ۴۰۰ رد می‌شود', _sc22==400 and _bd22.get('error')=='invalid_scope', (_sc22,_bd22))
+_sc22, _bd22 = req(BASE, '/api/consents', 'GET')
+_got22 = {i['scope']: i['granted'] for i in _bd22.get('items',[])}
+check('بخش۲۲ GET همان چیزی را برمی‌گرداند که POST نوشت',
+      _got22.get('vitals')==1 and _got22.get('medications')==1 and _got22.get('location')==0, _got22)
+
+# سازگاری بین‌لایه‌ای: هر scope ای که مرورگر می‌فرستد باید سمت سرور معتبر باشد.
+# بدون این سنجش، افزودن یک کلید در index.html بدون افزودن scope در سرور
+# بی‌صدا به ۴۰۰ می‌خورد و کاربر فقط «ذخیره نشد» می‌دید.
+import re as _re22
+_idx22 = open(os.path.join(ROOT,'index.html'),encoding='utf-8').read()
+_m22 = _re22.search(r'var CONSENT_SCOPE=\{([^}]*)\};', _idx22)
+check('بخش۲۲ نگاشت CONSENT_SCOPE در index.html پیدا می‌شود', bool(_m22), '')
+_map22 = dict(_re22.findall(r"(\w+):'(\w+)'", _m22.group(1))) if _m22 else {}
+check('بخش۲۲ هر چهار کلید اشتراک‌گذاری نگاشت دارند',
+      set(_map22)=={'shareVitals','shareMeds','shareLocation','shareCare'}, _map22)
+_bad22 = [(k,v) for k,v in _map22.items() if v not in _m14.CONSENT_SCOPES]
+check('بخش۲۲ همهٔ scope های مرورگر در CONSENT_SCOPES سرور معتبرند', not _bad22, _bad22)
+check('بخش۲۲ toggleSetting رضایت را به سرور می‌فرستد',
+      "syncSwitches();pushConsent(key,on);" in _idx22, '')
+check('بخش۲۲ باز کردن تنظیمات وضعیت را از سرور می‌خواند',
+      "if(type==='settings')syncConsents();" in _idx22, '')
+
+# --- بخش۲۳: بودجهٔ کارایی زیر همزمانی (محافظ دستاورد مرحلهٔ ۲۱) ---
+# پیش از اصلاح، db() در هر درخواست بوت‌استرپ کامل اسکیم را اجرا می‌کرد و
+# درخواست‌ها پشت قفل نوشتن SQLite صف می‌شدند. اندازه‌گیری با ۶۰ درخواست
+# همزمان: p50=۱۰۱۹ms برای /api/health و ۷٫۳ rps برای /api/medications.
+# پس از اصلاح: p50=۷٫۸ms و ۱۱۵۰ rps.
+# اندازه‌گیری ماتریسی نشان داد دو باگ در سنجهٔ «متفاوتی» دیده می‌شوند، پس
+# هر دو سنجیده می‌شوند:
+#   bootstrap در هر درخواست (queue سالم) → p50=۹۶٫۷ms، max=۲۰۰ms، ۲۹۴ rps
+#   queue=۵ (bootstrap سالم)            → p50=۸٫۵ms،  max=۱۲۲۷ms، ۴۸ rps
+#   هر دو اصلاح‌شده                      → p50≈۸ms،   max≈۲۱ms،  ≈۱۱۵۰ rps
+# آستانه‌ها: p50<۵۰ms (۶ برابر وضع خوب) و max<۶۰۰ms (۲۸ برابر وضع خوب).
+import threading as _th23, time as _t23, http.client as _hc23
+def _hit23(path, out):
+    _s=_t23.perf_counter()
+    try:
+        _cn=_hc23.HTTPConnection('127.0.0.1',4174,timeout=30); _cn.request('GET',path); _r=_cn.getresponse(); _r.read(); _cn.close()
+        out.append((_r.status,_t23.perf_counter()-_s))
+    except Exception as _e: out.append((str(_e),_t23.perf_counter()-_s))
+for _path23 in ('/api/health','/api/medications'):
+    _res23=[]; _th=[_th23.Thread(target=_hit23,args=(_path23,_res23)) for _ in range(60)]
+    _t0=_t23.perf_counter()
+    for _x in _th: _x.start()
+    for _x in _th: _x.join()
+    _wall=_t23.perf_counter()-_t0
+    _lat=sorted(x[1] for x in _res23); _p50=_lat[len(_lat)//2]*1000
+    _bad=[x[0] for x in _res23 if x[0]!=200]
+    check('بخش۲۳ %s زیر ۶۰ درخواست همزمان همه ۲۰۰'%_path23, not _bad, _bad[:5])
+    check('بخش۲۳ %s: p50 زیر ۵۰ms (باگ bootstrap: ۹۶٫۷ms)'%_path23, _p50<50, 'p50=%.1fms'%_p50)
+    _mx23=_lat[-1]*1000
+    check('بخش۲۳ %s: max زیر ۶۰۰ms (باگ backlog: ۱۲۲۷ms)'%_path23, _mx23<600, 'max=%.1fms'%_mx23)
 
 # --- ایندکس‌ها: وجودشان کافی نیست؛ باید در «نقشهٔ اجرا» هم دیده شوند ---
 _need=['ix_vitals_measured','ix_alerts_status_created','ix_actions_requested','ix_transactions_created',

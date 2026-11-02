@@ -81,9 +81,12 @@ console.log('--- ۳) اجرای واقعی منطق سوییچ در jsdom ---');
   }});
 
   // همان منطق تولیدی از خود index.html
+  // «async function» را هم می‌گیرد: اگر فقط «function name» را پیدا کنیم،
+  // کلمهٔ async که پیش از آن است جا می‌افتد و بدنهٔ await‌دار خطای نحوی می‌دهد.
   const grab = (name) => {
-    const i = html.indexOf('function ' + name + '(');
+    let i = html.indexOf('function ' + name + '(');
     if (i < 0) throw new Error('not found: ' + name);
+    if (html.slice(i - 6, i) === 'async ') i -= 6;
     let d = 0, j = html.indexOf('{', i);
     for (let k = j; k < html.length; k++) {
       if (html[k] === '{') d++;
@@ -146,12 +149,117 @@ console.log('--- ۵) اندازهٔ اهداف لمسی (استاندارد ۴۸
   check('ورودی range-row دست‌کم ۴۴px ارتفاع دارد', !!inp && parseFloat(inp[1]) >= 44, inp && inp[1]);
 }
 
-console.log('--- ۶) همسان بودن دارایی اندروید ---');
+// «return» در سطح بالای ماژول CommonJS از کل ماژول بیرون می‌زند و خلاصه و
+// process.exit را رد می‌کند؛ پس زنجیره را در یک متغیر نگه می‌داریم.
+let consentDone = null;
+console.log('--- ۶) رضایت سمت سرور: سوییچ‌ها واقعاً به /api/consents می‌رسند ---');
+{
+  const dom = new JSDOM('<!doctype html><html><body><div id="toast"></div></body></html>',
+                        { runScripts: 'outside-only' });
+  const w = dom.window;
+  const toasts = []; w.toast = m => toasts.push(m);
+  const offline = []; w.queueOffline = (p, o) => offline.push({ p: p, o: o });
+  w.API_BASE = 'http://127.0.0.1:4174';
+  const store = {};
+  Object.defineProperty(w, 'localStorage', { configurable: true, value: {
+    getItem: k => (k in store ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v); },
+    removeItem: k => { delete store[k]; },
+  }});
+
+  // «async function» را هم می‌گیرد: اگر فقط «function name» را پیدا کنیم،
+  // کلمهٔ async که پیش از آن است جا می‌افتد و بدنهٔ await‌دار خطای نحوی می‌دهد.
+  const grab = (name) => {
+    let i = html.indexOf('function ' + name + '(');
+    if (i < 0) throw new Error('not found: ' + name);
+    if (html.slice(i - 6, i) === 'async ') i -= 6;
+    let d = 0, j = html.indexOf('{', i);
+    for (let k = j; k < html.length; k++) {
+      if (html[k] === '{') d++;
+      else if (html[k] === '}') { d--; if (d === 0) return html.slice(i, k + 1); }
+    }
+    throw new Error('unbalanced: ' + name);
+  };
+  const scopeLine = html.match(/var CONSENT_SCOPE=\{[^}]*\};/);
+  check('نگاشت CONSENT_SCOPE در کد تعریف شده', !!scopeLine);
+  w.eval(scopeLine[0] + '\n' + grab('syncSwitches') + '\n' + grab('consentBody') + '\n' + grab('syncConsents') + '\n' + grab('pushConsent') +
+         '\n;window.CONSENT_SCOPE=CONSENT_SCOPE;window.pushConsent=pushConsent;window.syncConsents=syncConsents;');
+
+  // نگاشت باید دقیقاً با فهرست scope سمت سرور سازگار باشد
+  const map = w.CONSENT_SCOPE;
+  check('هر چهار کلید اشتراک‌گذاری به یک scope نگاشت شده',
+    map.shareVitals === 'vitals' && map.shareMeds === 'medications' &&
+    map.shareLocation === 'location' && map.shareCare === 'health', map);
+  check('dailyCheckin عمداً رضایت محلی است و به سرور نمی‌رود', !('dailyCheckin' in map));
+
+  // شاخهٔ ۱: سرور پذیرفت
+  let sent = [];
+  w.fetch = async (u, o) => { sent.push({ u: u, o: o });
+    if (u.indexOf('/api/consents') >= 0 && o && o.method === 'POST') return { ok: true, json: async () => ({ ok: true }) };
+    return { ok: true, json: async () => ({ items: [{ scope: 'vitals', granted: 1 }] }) }; };
+  consentDone = w.pushConsent('shareVitals', true).then(() => {
+    check('شاخهٔ پذیرش: POST به /api/consents فرستاده شد',
+      sent.some(x => x.u.indexOf('/api/consents') >= 0 && x.o.method === 'POST'), sent.map(x => x.u));
+    const body = JSON.parse(sent.find(x => x.o && x.o.method === 'POST').o.body);
+    check('بدنهٔ درخواست scope و granted درست دارد',
+      body.scope === 'vitals' && body.granted === true && body.updated_by === 'senior', body);
+    check('شاخهٔ پذیرش: چیزی در صف آفلاین نرفت', offline.length === 0, offline.length);
+
+    // شاخهٔ ۲: سرور رد کرد (۴۰۰) — باید مقدار محلی برگردد
+    store['shareMeds'] = '1';
+    w.fetch = async () => ({ ok: false, status: 400, json: async () => ({ error: 'invalid_scope' }) });
+    toasts.length = 0;
+    return w.pushConsent('shareMeds', true);
+  }).then(() => {
+    check('شاخهٔ رد: مقدار محلی برگردانده شد (نه «ذخیره شد» دروغین)',
+      store['shareMeds'] === '0', store['shareMeds']);
+    check('شاخهٔ رد: به کاربر گفته شد ذخیره نشد',
+      toasts.some(t => /ذخیره نشد/.test(t)), toasts);
+    check('شاخهٔ رد: اشتباهاً در صف آفلاین نرفت', offline.length === 0, offline.length);
+
+    // شاخهٔ ۳: خطای شبکه — مقدار محلی می‌ماند و در صف آفلاین می‌رود
+    store['shareLocation'] = '1';
+    w.fetch = async () => { throw new TypeError('Failed to fetch'); };
+    toasts.length = 0;
+    return w.pushConsent('shareLocation', true);
+  }).then(() => {
+    check('شاخهٔ آفلاین: مقدار محلی حفظ شد', store['shareLocation'] === '1', store['shareLocation']);
+    check('شاخهٔ آفلاین: درخواست در صف آفلاین ثبت شد',
+      offline.length === 1 && offline[0].p === '/api/consents', offline.map(x => x.p));
+    check('شاخهٔ آفلاین: به کاربر گفته شد بعداً همگام می‌شود',
+      toasts.some(t => /آفلاین/.test(t)), toasts);
+
+    // کلید محلی: هیچ درخواستی نباید برود
+    sent.length = 0; offline.length = 0;
+    w.fetch = async () => { throw new Error('should not be called'); };
+    return w.pushConsent('dailyCheckin', true);
+  }).then(() => {
+    check('کلید محلی هیچ درخواست شبکه‌ای نمی‌فرستد', sent.length === 0 && offline.length === 0);
+
+    // syncConsents: سرور منبع حقیقت است
+    w.fetch = async () => ({ ok: true, json: async () => ({ items: [
+      { scope: 'vitals', granted: 0 }, { scope: 'location', granted: 1 }] }) });
+    return w.syncConsents();
+  }).then(() => {
+    check('syncConsents وضعیت سرور را روی حافظهٔ محلی می‌نویسد',
+      store['vitals'] === undefined && store['shareVitals'] === '0' && store['shareLocation'] === '1',
+      { v: store['shareVitals'], l: store['shareLocation'] });
+    // پاسخ خراب نباید استثنای نگرفته بدهد
+    w.fetch = async () => ({ ok: true, json: async () => { throw new Error('bad json'); } });
+    return w.syncConsents();
+  }).then(() => {
+    check('syncConsents با JSON خراب فرونمی‌پاشد', true);
+  });
+}
+
+console.log('--- ۷) همسان بودن دارایی اندروید ---');
 {
   const asset = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'assets', 'index.html'), 'utf8');
   check('assets/index.html با index.html بایت‌به‌بایت یکسان است', asset === html);
 }
 
-console.log('\nبررسی‌ها: %d · شکست: %d', pass, fail);
-if (failures.length) { console.log('شکست‌ها:'); failures.forEach(f => console.log(' - ' + f)); }
-process.exit(fail ? 1 : 0);
+Promise.resolve(consentDone).then(() => {
+  console.log('\nبررسی‌ها: %d · شکست: %d', pass, fail);
+  if (failures.length) { console.log('شکست‌ها:'); failures.forEach(f => console.log(' - ' + f)); }
+  process.exit(fail ? 1 : 0);
+});

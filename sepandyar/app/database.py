@@ -16,19 +16,33 @@ from .clock import now
 from .config import DB
 
 # ================= بخش ۲: پایگاه‌داده — اتصال، PRAGMAها و طرحواره =================
-def db(h=None):
- # اتصال روی هندلر ثبت می‌شود تا در پایان درخواست بسته شود؛
- # وگرنه خطای وسط تراکنش، قفل نوشتن را رها می‌کند و کل پایگاه‌داده قفل می‌شود
- c=sqlite3.connect(DB,timeout=15); c.row_factory=sqlite3.Row
- # پایانهٔ PRAGMA عملکردی. ترتیب مهم است: نخست journal_mode، بعد دوام، بعد حافظهٔ نهان.
- # journal_mode در سرآیند «فایل» پایگاه‌داده نوشته می‌شود و پایاست؛ بقیه اتصال‌محورند و
- # در هر اتصال نو به مقدار پیش‌فرض برمی‌گردند، پس باید هر بار تنظیم شوند.
- # cache_size عمداً کوچک‌تر از توصیهٔ رایج ۶۴MB است: آن عدد برای pool اتصال نوشته شده،
- # ولی این سرور به‌ازای «هر درخواست» یک اتصال می‌گشاید و سقف حافظه در همزمانی ضرب می‌شود.
- c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA synchronous=NORMAL')
- c.execute('PRAGMA busy_timeout=15000'); c.execute('PRAGMA cache_size=-8000')
- c.execute('PRAGMA temp_store=MEMORY')
- if h is not None: h._db=c
+# --------------------------------------------------------------------------
+# بوت‌استرپ یک‌بارمصرف
+#
+# پیش‌تر کل این بخش (ساخت ~۳۰ جدول، دو ALTER شرطی، ساخت ایندکس یکتا، و نزدیک
+# به ۱۲۰ دستور INSERT OR IGNORE برای آستانه‌ها/واژه‌نامهٔ گویشی/قواعد ایمنی/
+# اپ‌های مجاز) در «هر» فراخوانی db() اجرا می‌شد — یعنی در هر درخواست HTTP.
+#
+# این یک گلوگاه جدی مقیاس‌پذیری بود و دو علت داشت:
+#  ۱) DELETE بی‌قیدوشرط روی caregivers و CREATE INDEX و آن INSERTها همه
+#     «قفل نوشتن» انحصاری SQLite را می‌گیرند. پس درخواست‌ها به‌جای همزمانی،
+#     پشت آن قفل صف می‌شدند. اندازه‌گیری با ۶۰ درخواست همزمان:
+#     /api/health با p50=۱۰۱۹ms و /api/medications با ۷ rps — در حالی که
+#     هزینهٔ واقعی هر درخواست تنها ۲٫۳ms بود.
+#  ۲) این کار idempotent است، پس تکرارش هیچ خروجی جدیدی نداشت؛ صرفاً
+#     هدررفت بود.
+#
+# حالا یک بار در هر فرایند اجرا می‌شود. skill مرجع
+# (supabase-postgres-best-practices / conn-pooling) همین را CRITICAL می‌داند:
+# اتصال و کار سنگین به‌ازای هر درخواست، سقف همزمانی را تعیین می‌کند.
+#
+# پیامد آگاهانه: اگر فایل پایگاه‌داده را «در حین کار سرور» پاک کنید، باید
+# سرور را restart کنید. هیچ آزمونی به بازسازی میان‌فرایندی تکیه نمی‌کند
+# (بررسی شد: هیچ تستی DB را پاک نمی‌کند).
+_BOOT_LOCK=threading.Lock()
+_BOOTED=False
+
+def _bootstrap(c):
  c.executescript('''CREATE TABLE IF NOT EXISTS profile(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT,age INTEGER,needs TEXT,assistant_name TEXT,updated_at TEXT);
  CREATE TABLE IF NOT EXISTS caregivers(id TEXT PRIMARY KEY,name TEXT,phone TEXT,role TEXT,permissions TEXT,created_at TEXT);
  CREATE TABLE IF NOT EXISTS wallet(id INTEGER PRIMARY KEY CHECK(id=1),balance INTEGER NOT NULL DEFAULT 0,currency TEXT NOT NULL DEFAULT 'IRR');
@@ -186,4 +200,34 @@ def db(h=None):
   ('baluchi','منی','من','ضمیر — بلوچی'),('baluchi','درد','درد','بدون تغییر'),
   ('kermani','سی','برای','لهجه کرمانی'),('kermani','میرم','می‌روم','لهجه کرمانی')]
  for i,(acc,var,can,note) in enumerate(dia): c.execute('INSERT OR IGNORE INTO dialect_lexicon VALUES(?,?,?,?,?)',('dl%d'%i,acc,var,can,note))
- c.commit(); return c
+ c.commit()
+
+def db(h=None):
+ """اتصال به ازای هر درخواست + PRAGMAهای اتصال‌محور.
+
+ساخت جدول‌ها و seed در _bootstrap است و فقط یک بار در هر فرایند اجرا
+می‌شود. اتصال روی هندلر ثبت می‌شود تا در پایان درخواست بسته شود؛ وگرنه
+خطای وسط تراکنش، قفل نوشتن را رها می‌کند و کل پایگاه‌داده قفل می‌شود.
+
+journal_mode عمداً اینجا تنظیم «نمی‌شود»: در سرآیند فایل پایگاه‌داده نوشته
+می‌شود و پایاست، پس یک بار در بوت‌استرپ کافی است — و تنظیم مجددش در هر
+اتصال زیر همزمانی هزینهٔ قفل داشت. بقیهٔ PRAGMAها اتصال‌محورند و در هر
+اتصال نو به پیش‌فرض برمی‌گردند، پس باید هر بار تنظیم شوند.
+cache_size عمداً کوچک‌تر از توصیهٔ رایج ۶۴MB است: آن عدد برای pool اتصال
+نوشته شده، ولی این سرور به‌ازای «هر درخواست» یک اتصال می‌گشاید و سقف حافظه
+در همزمانی ضرب می‌شود.
+"""
+ global _BOOTED
+ c=sqlite3.connect(DB,timeout=15); c.row_factory=sqlite3.Row
+ c.execute('PRAGMA synchronous=NORMAL')
+ c.execute('PRAGMA busy_timeout=15000'); c.execute('PRAGMA cache_size=-8000')
+ c.execute('PRAGMA temp_store=MEMORY')
+ if h is not None: h._db=c
+ # بررسی دوگانه: مسیر سریع بدون قفل، و فقط نخستین فراخوانی قفل می‌گیرد.
+ if not _BOOTED:
+  with _BOOT_LOCK:
+   if not _BOOTED:
+    c.execute('PRAGMA journal_mode=WAL')
+    _bootstrap(c)
+    _BOOTED=True
+ return c

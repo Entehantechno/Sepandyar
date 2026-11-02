@@ -31,6 +31,16 @@ def open_alert_once(c,atype,message,severity='normal'):
    (aid,atype,message,severity,now(),atype))
  return aid if cur.rowcount else None
 
+# دامنه‌های رضایتی که سالمند می‌تواند از رابط کاربری تنظیم کند.
+# این فهرست عمداً یک ثابت مشترک است تا فرانت‌اند و سرور از یک منبع بخوانند؛
+# آزمون ui_a11y نگاشتِ سمت مرورگر را با همین فهرست تطبیق می‌دهد.
+# سه دامنهٔ vitals/medications/location در مرحلهٔ ۲۱ افزوده شدند: پیش از آن
+# چهار سوییچ حریم خصوصی در رابط کاربری فقط در localStorage می‌ماندند و هرگز
+# به سرور نمی‌رسیدند، در حالی که consent_granted سه endpoint مراقب را قفل
+# می‌کرد. یعنی کنترل کاربر تشریفاتی بود.
+CONSENT_SCOPES=('health','wallet','screen_control','voice_profile','emergency_call',
+                'vitals','medications','location')
+
 def consent_granted(c,scope='health'):
  r=c.execute('SELECT granted FROM consents WHERE scope=?',(scope,)).fetchone(); return bool(r and r['granted'])
 
