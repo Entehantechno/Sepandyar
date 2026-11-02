@@ -3,12 +3,20 @@ package ai.arena.sepandyar
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
+import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Bundle
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
+import android.view.Display
 import android.view.accessibility.AccessibilityNodeInfo
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class ScreenControlService : AccessibilityService() {
     companion object {
@@ -25,6 +33,25 @@ class ScreenControlService : AccessibilityService() {
         const val PINCH_MS = 280L
         /** سقف متن خوانده‌شدهٔ صفحه؛ یک صفحهٔ شلوغ نباید صف گفتار را منفجر کند. */
         const val SCREEN_TEXT_MAX = 4000
+
+        /** کلید رضایت بینایی روی صفحه — **پیش‌فرض خاموش**. */
+        const val PREF_VISION = "screenVision"
+        /** عرض تصویر ارسالی؛ بزرگ‌تر از این برای خواندن متن بی‌فایده است. */
+        const val VISION_MAX_W = 720
+        /** کیفیت JPEG — تعادل میان خوانایی رقم‌ها و حجم. */
+        const val VISION_JPEG_Q = 72
+        /** سقف انتظار برای پاسخ takeScreenshot. */
+        const val VISION_TIMEOUT_MS = 3000L
+        /** مدت نمایش نشانگر «دارم صفحه را می‌بینم». */
+        const val VISION_INDICATOR_MS = 1600L
+
+        /**
+         * رضایت بینایی. جدا از دسترسی دسترس‌پذیری است: داشتن سرویس دسترس‌پذیری
+         * به هیچ وجه مجوز گرفتن تصویر نیست.
+         */
+        fun visionAllowed(ctx: Context): Boolean =
+            ctx.getSharedPreferences("assistant", Context.MODE_PRIVATE)
+                .getBoolean(PREF_VISION, false)
 
         /**
          * برچسب‌های رایج دکمهٔ «ارسال». فقط در مسیر جایگزین imeEnter برای
@@ -574,4 +601,86 @@ class ScreenControlService : AccessibilityService() {
         for (i in 0 until node.childCount) node.getChild(i)?.let { if (scrollNode(it, action)) return true }
         return false
     }
+    // ──────────────────────────────────────────────────────────────────────
+    //  بینایی روی اسکرین‌شات
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * گرفتن تصویر صفحه برای خوانده‌شدن با مدل بینایی.
+     *
+     * **چرا اصلاً لازم است؟** درخت گره‌های دسترس‌پذیری برای اپ‌های فلاتر،
+     * بازی‌های canvas و برخی WebView ها یا خالی است یا بسیار نازک. در آن حالت
+     * `readScreenText()` رشتهٔ خالی می‌دهد و سالمند هیچ کمکی نمی‌گیرد. خواندن
+     * متن از روی پیکسل‌ها آخرین راه است.
+     *
+     * **سه قید حریم که عمداً گذاشته شده:**
+     *  1. کلید `screenVision` **پیش‌فرض خاموش** است و هیچ کلید دیگری روشنش
+     *     نمی‌کند.
+     *  2. `takeScreenshot()` روی API 30 **کاملاً بی‌صداست** — نه اعلان، نه
+     *     toast، نه اندیکاتور. پس خودمان **پیش از** گرفتن تصویر یک overlay
+     *     نشان می‌دهیم. بی‌صدا بودنِ API مجوز بی‌صدا بودنِ ما نیست.
+     *  3. تصویر روی دستگاه کوچک و فشرده می‌شود، هیچ فایلی روی دیسک نوشته
+     *     نمی‌شود و تنها به‌صورت رشته در حافظه به پل داده می‌شود.
+     *
+     * زیر API 30 رشتهٔ خالی برمی‌گردانیم؛ عمداً به MediaProjection نمی‌افتیم
+     * چون آن مسیر دیالوگ مجوز جدا می‌خواهد و بیرون از دامنهٔ این سرویس است.
+     *
+     * @return Base64 یک JPEG کوچک، یا رشتهٔ خالی در **هر** حالت خطا.
+     */
+    fun captureForVision(): String {
+        if (!visionAllowed(this)) return ""
+        if (Build.VERSION.SDK_INT < 30) return ""
+        announceCapture()
+        val done = CountDownLatch(1)
+        val out = AtomicReference("")
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: TakeScreenshotCallback.ScreenshotResult) {
+                        try { out.set(encodeForVision(screenshot)) } catch (e: Exception) { }
+                        done.countDown()
+                    }
+                    override fun onFailure(errorCode: Int) {
+                        // FLAG_SECURE همین‌جا می‌شکند؛ خطا را قورت می‌دهیم و
+                        // رشتهٔ خالی می‌دهیم تا پل جاوااسکریپت استثنا نبیند.
+                        done.countDown()
+                    }
+                })
+        } catch (e: Exception) {
+            return ""
+        }
+        try { done.await(VISION_TIMEOUT_MS, TimeUnit.MILLISECONDS) } catch (e: InterruptedException) { return "" }
+        return out.get() ?: ""
+    }
+
+    /**
+     * نشانگر بصری پیش از گرفتن تصویر. اگر این نبود، سالمند هرگز نمی‌فهمید
+     * که از صفحه‌اش تصویر گرفته شده است.
+     */
+    private fun announceCapture() {
+        OverlayController.show(this, "دارم صفحه را می‌بینم", null)
+        OverlayController.update("دارم صفحه را می‌بینم", "تصویر فقط برای خواندن متن است", 0, 0)
+        main.postDelayed({ OverlayController.hide() }, VISION_INDICATOR_MS)
+    }
+
+    /** تبدیل ScreenshotResult به JPEG کوچک Base64. */
+    private fun encodeForVision(screenshot: TakeScreenshotCallback.ScreenshotResult): String {
+        val buffer = screenshot.hardwareBuffer
+        val hardware = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace) ?: return ""
+        // روی Bitmap سخت‌افزاری نمی‌توان مقیاس داد؛ اول باید نرم شود.
+        val software = hardware.copy(Bitmap.Config.ARGB_8888, false)
+        hardware.recycle()
+        if (software == null) { buffer.close(); return "" }
+        val w = if (software.width > VISION_MAX_W) VISION_MAX_W else software.width
+        val scaled = if (w < software.width)
+            Bitmap.createScaledBitmap(software, w, software.height * w / software.width, true)
+        else software
+        val bytes = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_Q, bytes)
+        if (scaled !== software) scaled.recycle()
+        software.recycle()
+        buffer.close()
+        return Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)
+    }
+
 }

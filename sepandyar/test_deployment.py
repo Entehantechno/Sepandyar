@@ -1505,8 +1505,16 @@ _idx22 = open(os.path.join(ROOT,'index.html'),encoding='utf-8').read()
 _m22 = _re22.search(r'var CONSENT_SCOPE=\{([^}]*)\};', _idx22)
 check('بخش۲۲ نگاشت CONSENT_SCOPE در index.html پیدا می‌شود', bool(_m22), '')
 _map22 = dict(_re22.findall(r"(\w+):'(\w+)'", _m22.group(1))) if _m22 else {}
-check('بخش۲۲ هر چهار کلید اشتراک‌گذاری نگاشت دارند',
-      set(_map22)=={'shareVitals','shareMeds','shareLocation','shareCare'}, _map22)
+check('بخش۲۲ همهٔ کلیدهای دارای نگاشت، درست نگاشت شده‌اند',
+      set(_map22)=={'shareVitals','shareMeds','shareLocation','shareCare','screenVision'}, _map22)
+# screenVision تنها کلیدی است که داده‌ای از دستگاه بیرون می‌فرستد (تصویر
+# صفحه) پس تنها کلیدی است که scope سمت سرور لازم دارد. readNotifications
+# عمداً نگاشت «ندارد»: محتوای اعلان هرگز از گوشی بیرون نمی‌رود، پس رضایت
+# سمت سرور برای چیزی که ارسال نمی‌شود بی‌معناست. این یک تصمیم است نه فراموشی.
+check('بخش۲۲ readNotifications عمداً scope سمت سرور ندارد (داده‌ای ارسال نمی‌شود)',
+      'readNotifications' not in _map22, _map22.get('readNotifications'))
+check('بخش۲۲ screenVision به scope جدید screen_vision نگاشت شده',
+      _map22.get('screenVision')=='screen_vision', _map22.get('screenVision'))
 _bad22 = [(k,v) for k,v in _map22.items() if v not in _m14.CONSENT_SCOPES]
 check('بخش۲۲ همهٔ scope های مرورگر در CONSENT_SCOPES سرور معتبرند', not _bad22, _bad22)
 check('بخش۲۲ toggleSetting رضایت را به سرور می‌فرستد',
@@ -1974,6 +1982,81 @@ if _tz_saved is None: os.environ.pop('TZ',None)
 else: os.environ['TZ']=_tz_saved
 try: _t24.tzset()
 except Exception: pass
+
+print('--- بخش ۲۷: خواندن صفحه با بینایی (رضایت، کران، نرخ، حریم) ---')
+# این بخش تنها آزمونی است که endpoint تازه را «اجرا» می‌کند. سنجش‌های ساختاری
+# §۱۱ در test_android_control.py فقط وجود کد را می‌بینند؛ اینجا سه قید حریم
+# واقعاً زیر درخواست می‌روند.
+import time as _t27, sqlite3 as _sq27
+sys.path.insert(0, ROOT)
+import app.handler as _h27
+
+check('بخش۲۷ screen_vision در CONSENT_SCOPES سرور هست',
+      'screen_vision' in _m14.CONSENT_SCOPES, sorted(_m14.CONSENT_SCOPES))
+
+# ۱) بدون رضایت: نه ۲۰۰، نه ۵۰۰ — ۴۰۳ با راهنما
+_s,_j = req(BASE,'/api/screen/vision','POST',{'image':'AAAA'})
+check('بخش۲۷ بدون رضایت سالمند ۴۰۳ می‌دهد', _s==403, (_s,_j))
+check('بخش۲۷ پیام ۴۰۳ می‌گوید کجا رضایت بدهد (نه فقط «نه»)',
+      _j.get('error')=='senior_consent_not_granted' and bool(_j.get('message')), _j)
+
+_s,_j = req(BASE,'/api/consents','POST',{'scope':'screen_vision','granted':True,
+                                        'confirmed_by_voice':False,'updated_by':'senior'})
+check('بخش۲۷ رضایت screen_vision ثبت می‌شود', _s==200, (_s,_j))
+
+# ۲) کران اندازه: پیش از محدودیت نرخ سنجیده می‌شود، وگرنه یک تصویر غول‌پیکر
+#    سهمیهٔ نرخ کاربر را بی‌مصرف می‌سوزاند.
+_s,_j = req(BASE,'/api/screen/vision','POST',{})
+check('بخش۲۷ بدون تصویر ۴۰۰ می‌دهد', _s==400 and _j.get('error')=='image_required', (_s,_j))
+_s,_j = req(BASE,'/api/screen/vision','POST',{'image':'A'*(_h27.VISION_MAX_B64+10)})
+check('بخش۲۷ تصویر بزرگ‌تر از کران ۴۱۳ می‌دهد', _s==413, (_s,_j))
+# فیلد غیرساده (شیء) نباید به ۵۰۰ بخورد
+_s,_j = req(BASE,'/api/screen/vision','POST',{'image':{'a':1}})
+check('بخش۲۷ فیلد تصویری غیررشته‌ای ۴۰۰ می‌دهد نه ۵۰۰', _s==400, (_s,_j))
+
+# ۳) واحدِ محدودکنندهٔ نرخ. این dict در پروسهٔ «آزمون» است نه پروسهٔ سرور،
+#    پس منطق را می‌سنجد نه وضعیت زندهٔ سرور را؛ آن را سنجش ۷ جدا می‌سنجد.
+_h27._VISION_HITS.clear()
+_ok27=[_h27.vision_rate_ok('10.0.0.1') for _ in range(_h27.VISION_RATE_LIMIT+2)]
+check('بخش۲۷ دقیقاً %d فراخوانی در پنجره مجاز است و بقیه رد می‌شوند'%_h27.VISION_RATE_LIMIT,
+      _ok27[:_h27.VISION_RATE_LIMIT]==[True]*_h27.VISION_RATE_LIMIT and not any(_ok27[_h27.VISION_RATE_LIMIT:]), _ok27)
+check('بخش۲۷ سقف برای هر IP جداست (یک کاربر پرهجوم بقیه را قفل نمی‌کند)',
+      _h27.vision_rate_ok('10.0.0.2'), '')
+# رشد نامتناهی map: با هزاران IP مختلف این dict هرگز کوچک نمی‌شد.
+_h27._VISION_HITS.clear()
+for _i in range(_h27.VISION_IP_CAP+50):
+    _h27._VISION_HITS['9.%d.%d.%d'%(_i//65025%250,_i//250%250,_i%250)]=[_t27.time()-9999]
+_h27.vision_rate_ok('10.0.0.3')
+check('بخش۲۷ map محدودکننده پس از سرریز هرس می‌شود',
+      len(_h27._VISION_HITS) < _h27.VISION_IP_CAP+50, len(_h27._VISION_HITS))
+
+# ۴+۵) مسیر کامل روی سرور زنده: نبودِ کلید مدل و محدودیت نرخ «با هم».
+# نسخهٔ نخست این دو سنجش جدا بودند؛ نتیجهٔ واقعی [۵۰۲×۵، ۴۲۹×۲] بود و
+# سنجش نرخ بی‌آنکه باگی در کار باشد شکست خورد، چون خودِ درخواست ۵۰۲ یک
+# سهمیه از پنجره مصرف کرده بود. یک درخواست که از محدودکننده «رد» می‌شود
+# سهمیه نمی‌گیرد، ولی یک درخواست که از آن «می‌گذرد» و بعد در مدل می‌شکند
+# سهمیه می‌گیرد — و این رفتار درست است.
+_r27=[req(BASE,'/api/screen/vision','POST',{'image':'/9j/4AAQSkZJRg=='})
+      for _ in range(_h27.VISION_RATE_LIMIT+1)]
+_codes27=[_c27b for _c27b,_ in _r27]
+_j27=_r27[0][1]
+check('بخش۲۷ نبودِ کلید مدل ۵۰۲ می‌دهد نه ۵۰۰', _codes27[0]==502, _codes27)
+_blob=json.dumps(_j27,ensure_ascii=False).lower()
+check('بخش۲۷ پاسخ خطا کلید، پشته یا متغیر محیطی را لو نمی‌دهد',
+      'traceback' not in _blob and 'openrouter' not in _blob and 'api_key' not in _blob, _j27)
+check('بخش۲۷ روی سرور زنده دقیقاً %d درخواست در پنجره می‌گذرد و بعدی ۴۲۹ است'%_h27.VISION_RATE_LIMIT,
+      sum(1 for _c in _codes27 if _c!=429)==_h27.VISION_RATE_LIMIT and _codes27[-1]==429, _codes27)
+
+# ۶) حریم: تصویر نباید هیچ‌جا بماند
+_c27=_sq27.connect(_m14.DB); _c27.row_factory=_sq27.Row
+_rows27=_c27.execute("SELECT payload FROM events WHERE type='screen_vision_read' ORDER BY rowid DESC LIMIT 8").fetchall()
+check('بخش۲۷ رویداد «بی‌محتوا» ثبت شده تا سوءاستفاده قابل ردیابی باشد', len(_rows27)>=1, len(_rows27))
+_leak27=[r['payload'] for r in _rows27
+         if 'image' in r['payload'] or 'base64' in r['payload'].lower() or '/9j/' in r['payload']]
+check('بخش۲۷ خودِ تصویر در هیچ رویدادی ذخیره نشده', not _leak27, _leak27[:1])
+check('بخش۲۷ جدولی برای نگهداری تصویر/اسکرین‌شات ساخته نشده',
+      _c27.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND (name LIKE '%vision%' OR name LIKE '%screenshot%' OR name LIKE '%screen_image%')").fetchone()[0]==0, '')
+_c27.close()
 
 print()
 print('بررسی‌ها: %d · شکست: %d'%(total,len(failures)))

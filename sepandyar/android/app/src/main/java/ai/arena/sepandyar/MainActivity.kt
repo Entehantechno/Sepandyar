@@ -270,6 +270,27 @@ class MainActivity : Activity() {
             if (!bridgeTrusted) return false
             return try { NotificationService.instance?.dismissAll() ?: false } catch (e: Exception) { false }
         }
+
+        // ── بینایی روی صفحه ────────────────────────────────────────────────
+        @JavascriptInterface fun screenVisionAllowed(): Boolean =
+            ScreenControlService.visionAllowed(this@MainActivity)
+        @JavascriptInterface fun setScreenVisionAllowed(on: Boolean) {
+            if (!bridgeTrusted) return
+            getSharedPreferences("assistant", MODE_PRIVATE).edit()
+                .putBoolean(ScreenControlService.PREF_VISION, on).apply()
+        }
+        /**
+         * Base64 یک JPEG کوچک، یا رشتهٔ خالی.
+         *
+         * متدهای `@JavascriptInterface` روی نخ اختصاصی JavaBridge اجرا
+         * می‌شوند نه روی نخ اصلی، پس بلوکه شدن اینجا رابط کاربری را
+         * منجمد نمی‌کند. عمداً همگام است: پل اندروید مقدار بازگشتی را
+         * همگام می‌دهد و Promise از آن رد نمی‌شود.
+         */
+        @JavascriptInterface fun captureScreenForVision(): String {
+            if (!bridgeTrusted) return ""
+            return try { ScreenControlService.instance?.captureForVision() ?: "" } catch (e: Exception) { "" }
+        }
         @JavascriptInterface fun bringAppToFront() { if (!bridgeTrusted) return; runOnUiThread { returnFromOverlay() } }
     }
 
@@ -292,8 +313,15 @@ class MainActivity : Activity() {
 }
 
 private val ApprovedApps = setOf(
-    // Package name واقعی هر اپ پس از تست روی دستگاه در این فهرست ثبت می‌شود.
-    "com.snappfood", "cab.snapp.passenger", "com.android.chrome", "com.google.android.apps.chrome", "com.example.store"
+    // شناسه‌ها از گوگل‌پلی تأیید شده‌اند (۲۰۲۶). «com.snappfood» که پیش‌تر
+    // اینجا بود هرگز شناسهٔ اسنپ‌فود نبود و آن رسپی بی‌صدا شکست می‌خورد؛
+    // شناسهٔ واقعی com.zoodfood.android.play است.
+    // قاعده: هر بسته‌ای که در approved_apps سمت سرور seed می‌شود باید اینجا
+    // هم باشد، وگرنه رسپی ثبت می‌شود ولی هرگز اجرا نمی‌شود. آزمون §۱۱ در
+    // test_android_control.py همین نامتغیر را می‌سنجد.
+    "com.zoodfood.android.play", "cab.snapp.passenger", "com.android.chrome",
+    "com.google.android.apps.chrome", "ir.mci.ecareapp",
+    "com.sibche.aspardproject.app", "com.example.store"
 )
 
 data class ScreenAction(val type: String, val payload: String)

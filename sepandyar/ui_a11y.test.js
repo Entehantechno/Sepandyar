@@ -252,6 +252,141 @@ console.log('--- ۶) رضایت سمت سرور: سوییچ‌ها واقعاً 
   });
 }
 
+console.log('--- ۸) «صفحه را برایم بخوان»: ترتیب مسیرها و حریم ---');
+{
+  // تنها آزمونی که دو تابع تازه را «اجرا» می‌کند؛ سنجش‌های ساختاری §۱۱ در
+  // test_android_control.py فقط وجود کد را می‌بینند.
+  //
+  // همهٔ قدم‌ها در یک زنجیرهٔ ترتیبی await می‌شوند. نسخهٔ نخست هر قدم را
+  // جداگانه در Promise.all می‌گذاشت؛ در نتیجه کد همگامِ قدم‌های بعدی پیش از
+  // .then های قدم‌های قبلی اجرا می‌شد، mock عوض می‌شد و ۹ سنجش بی‌آنکه باگی
+  // در کد محصول باشد شکست می‌خورد.
+  const dom = new JSDOM('<!doctype html><html><body><div id="transcript"></div></body></html>',
+                        { runScripts: 'outside-only' });
+  const w = dom.window;
+  const toasts = []; w.toast = m => toasts.push(m);
+  const spoken = []; w.speakBack = t => spoken.push(t);
+  const store = {};
+  Object.defineProperty(w, 'localStorage', { configurable: true, value: {
+    getItem: k => (k in store ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v); },
+    removeItem: k => { delete store[k]; },
+  }});
+  const grab8 = (name) => {
+    let i = html.indexOf('function ' + name + '(');
+    if (i < 0) throw new Error('not found: ' + name);
+    if (html.slice(i - 6, i) === 'async ') i -= 6;
+    let d = 0, j = html.indexOf('{', i);
+    for (let k = j; k < html.length; k++) {
+      if (html[k] === '{') d++;
+      else if (html[k] === '}') { d--; if (d === 0) return html.slice(i, k + 1); }
+    }
+    throw new Error('unbalanced: ' + name);
+  };
+  const posts = [];
+  w.apiRequest = async (path, opt) => { posts.push({ path: path, opt: opt }); return { ok: true, text: 'فشار خون ۱۲ روی ۸' }; };
+  w.eval(grab8('readScreenAloud') + '\n' + grab8('readNotificationsAloud') +
+         '\n;window.readScreenAloud=readScreenAloud;window.readNotificationsAloud=readNotificationsAloud;');
+  const reset = () => { spoken.length = 0; toasts.length = 0; posts.length = 0; };
+
+  consentDone = (async () => {
+    await consentDone;
+    let caps = 0;
+
+    // ۱) درخت گره جواب می‌دهد ⇒ بینایی هرگز صدا زده نمی‌شود.
+    w.SepandyarNative = { readScreenText: () => 'دکمهٔ تأیید، مبلغ ۱۲۰۰۰ تومان',
+                          captureScreenForVision: () => { caps++; return 'IMG'; } };
+    reset(); await w.readScreenAloud();
+    check('درخت گره که جواب بدهد، همان متن خوانده می‌شود', spoken[0] === 'دکمهٔ تأیید، مبلغ ۱۲۰۰۰ تومان', spoken);
+    check('تا وقتی درخت جواب می‌دهد هیچ تصویری گرفته نمی‌شود', caps === 0, caps);
+    check('متن همزمان روی صفحه هم نمایش داده می‌شود (دو‌حسی)',
+      w.document.getElementById('transcript').textContent.length > 0, '');
+    check('در مسیر بی‌خطر هیچ درخواست شبکه‌ای نمی‌رود', posts.length === 0, posts.length);
+
+    // ۲) درخت خالی + رضایت خاموش ⇒ تصویر گرفته نمی‌شود.
+    w.SepandyarNative = { readScreenText: () => '',
+                          captureScreenForVision: () => { caps++; return 'IMG'; } };
+    store.screenVision = '0';
+    reset(); await w.readScreenAloud();
+    check('بدون رضایت، حتی وقتی درخت خالی است تصویر گرفته نمی‌شود', caps === 0, caps);
+    check('به کاربر گفته می‌شود کجا اجازه بدهد (نه سکوت)',
+      spoken.length === 1 && spoken[0].indexOf('حریم خصوصی') >= 0, spoken);
+    check('بدون رضایت هیچ درخواستی به سرور نمی‌رود', posts.length === 0, posts.length);
+
+    // ۳) درخت خالی + رضایت روشن ⇒ بینایی.
+    w.SepandyarNative = { readScreenText: () => '   ',
+                          captureScreenForVision: () => { caps++; return 'BASE64IMG'; } };
+    store.screenVision = '1';
+    reset(); await w.readScreenAloud();
+    check('با رضایت، از بینایی استفاده می‌شود', caps === 1, caps);
+    check('تصویر به /api/screen/vision فرستاده می‌شود',
+      posts.length === 1 && posts[0].path === '/api/screen/vision', posts.map(x => x.path));
+    check('بدنهٔ درخواست خودِ تصویر است',
+      posts[0] && JSON.parse(posts[0].opt.body).image === 'BASE64IMG', posts[0] && posts[0].opt.body);
+    check('متن بازگشتی از بینایی خوانده می‌شود', spoken[0] === 'فشار خون ۱۲ روی ۸', spoken);
+    check('به کاربر گفته می‌شود که از تصویر خوانده شد', toasts.some(t => t.indexOf('تصویر') >= 0), toasts);
+
+    // ۴) سقف گفتار: صفحهٔ شلوغ نباید سالمند را دقیقه‌ها زیر حرف ببرد.
+    w.SepandyarNative = { readScreenText: () => 'الف'.repeat(900) };
+    reset(); await w.readScreenAloud();
+    check('متن بلند کوتاه می‌شود و کوتاه شدنش اعلام می‌شود',
+      spoken[0].length < 1300 && spoken[0].indexOf('کوتاه شد') >= 0, spoken[0].length);
+
+    // ۵) نبودِ پوستهٔ بومی نباید استثنا بدهد.
+    delete w.SepandyarNative;
+    reset(); await w.readScreenAloud();
+    check('در مرورگر معمولی فقط راهنما داده می‌شود، استثنا نه',
+      toasts.length === 1 && spoken.length === 0, [toasts, spoken]);
+
+    // ۶) اعلان‌ها: بدون رضایت اصلاً خوانده نمی‌شوند.
+    let gotN = 0;
+    w.SepandyarNative = { notificationsAllowed: () => false,
+                          getNotifications: () => { gotN++; return '[]'; } };
+    reset(); w.readNotificationsAloud();
+    check('بدون رضایت، اعلان‌ها اصلاً خوانده نمی‌شوند', gotN === 0, gotN);
+    check('به کاربر توضیح داده می‌شود که داده از گوشی بیرون نمی‌رود',
+      spoken.length === 1 && spoken[0].indexOf('جایی فرستاده نمی‌شوند') >= 0, spoken);
+
+    // ۷) با رضایت: حداکثر ۵ تا خوانده می‌شود و بقیه شمرده.
+    const many = JSON.stringify(Array.from({ length: 9 }, (_, i) => ({ app: 'a', title: 'ع' + i, text: 'م' + i })));
+    w.SepandyarNative = { notificationsAllowed: () => true, getNotifications: () => many };
+    reset(); w.readNotificationsAloud();
+    check('شمار کل اعلان‌ها گفته می‌شود', spoken[0].indexOf('9') >= 0, spoken[0]);
+    check('فقط ۵ تای اول خوانده می‌شود', spoken[0].indexOf('ع4') >= 0 && spoken[0].indexOf('ع5') < 0, spoken[0]);
+    check('باقی‌مانده شمرده می‌شود نه نادیده', spoken[0].indexOf('اعلان دیگر') >= 0, spoken[0]);
+
+    // ۸) XSS: عنوان اعلان از یک اپ بیرونی می‌آید و نباید HTML تفسیر شود.
+    const evil = JSON.stringify([{ app: 'x', title: '<img src=x onerror="window.__pwn=1">', text: '<b>q</b>' }]);
+    w.SepandyarNative = { notificationsAllowed: () => true, getNotifications: () => evil };
+    const tr = w.document.getElementById('transcript');
+    tr.textContent = '';
+    w.readNotificationsAloud();
+    check('عنوان اعلان به‌صورت متن درج می‌شود نه HTML (هیچ عنصری ساخته نشد)',
+      tr.children.length === 0, tr.innerHTML);
+    check('اسکریپت تزریق‌شده اجرا نشد', w.__pwn === undefined, w.__pwn);
+    w.SepandyarNative = { notificationsAllowed: () => true, getNotifications: () => 'not-json' };
+    let threw = false;
+    try { w.readNotificationsAloud(); } catch (e) { threw = true; }
+    check('JSON خراب فرونمی‌پاشد', !threw, threw);
+
+    // ۹) کلیدها باید همان لحظه روی پوستهٔ بومی نوشته شوند.
+    const native8 = {};
+    w.SepandyarNative = { setNotificationsAllowed: v => { native8.n = v; },
+                          setScreenVisionAllowed: v => { native8.v = v; } };
+    w.eval(html.match(/var CONSENT_SCOPE=\{[^}]*\};/)[0] + '\n' + grab8('syncSwitches') + '\n' +
+           grab8('consentBody') + '\n' + grab8('toggleSetting') + '\n;window.toggleSetting=toggleSetting;');
+    w.pushConsent = () => {};
+    // قدم ۳ این کلید را «۱» گذاشته بود، پس toggle درست آن را خاموش می‌کرد.
+    // از «۰» شروع می‌کنیم تا جهتِ روشن‌شدن سنجیده شود.
+    store.screenVision = '0'; delete store.readNotifications;
+    w.toggleSetting('screenVision');
+    check('روشن کردن بینایی فوراً روی پوستهٔ بومی نوشته می‌شود', native8.v === true, native8);
+    w.toggleSetting('readNotifications');
+    check('روشن کردن اعلان‌ها فوراً روی پوستهٔ بومی نوشته می‌شود', native8.n === true, native8);
+    check('screenVision به scope سرور نگاشت شده', w.CONSENT_SCOPE.screenVision === 'screen_vision', w.CONSENT_SCOPE);
+  })();
+}
+
 console.log('--- ۷) همسان بودن دارایی اندروید ---');
 {
   const asset = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'assets', 'index.html'), 'utf8');

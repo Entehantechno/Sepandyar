@@ -73,3 +73,28 @@ def call_llm(c,user_text,context=None,pid='default'):
   with ureq.urlopen(req,timeout=25) as r:
    data=json.loads(r.read()); return data.get('choices',[{}])[0].get('message',{}).get('content')
  except Exception: return None
+
+def call_llm_vision(c,image_b64,prompt=None,pid='default'):
+ """خواندن متن یک تصویر صفحه با مدل بینایی.
+
+ سه تفاوت عمدی با call_llm:
+  - پیام کاربر به‌جای رشته، یک فهرست چندبخشی است (متن + image_url)؛ این
+    قالب رسمی محتوای چندوجهی است و با رشتهٔ خالی کار نمی‌کند.
+  - حافظهٔ مکالمه **تزریق نمی‌شود**. تصویر یک صفحهٔ بی‌ربط است و گفت‌وگوهای
+    پیشین فقط مدل را به حدس زدن دربارهٔ سلامت سالمند وا می‌دارند.
+  - خروجی به «متنی که روی صفحه است» محدود می‌شود، نه تفسیر آن. تفسیر
+    پزشکی کار لایهٔ ایمنی است، نه این تابع.
+ """
+ cfg=c.execute('SELECT * FROM ai_config WHERE id=1').fetchone(); key=os.getenv('OPENROUTER_API_KEY') or os.getenv('OPENAI_API_KEY')
+ if not key or not cfg or not image_b64: return None
+ base=(cfg['base_url'] or 'https://openrouter.ai/api/v1').rstrip('/')+'/chat/completions'
+ ask=prompt or 'متن قابل مشاهده روی این تصویر را به همان ترتیبی که خوانده می‌شود، ساده و به فارسی بنویس. فقط متن؛ تفسیر یا توصیه اضافه نکن.'
+ system='تو متن صفحهٔ نمایش یک گوشی را برای یک سالمند می‌خوانی. فقط آنچه واقعاً روی تصویر هست را بگو. اگر خوانا نیست بگو «خوانا نیست». هرگز تشخیص پزشکی نده.'
+ content=[{'type':'text','text':ask},
+          {'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+image_b64}}]
+ payload={'model':cfg['model'],'temperature':0.0,'messages':[{'role':'system','content':system},{'role':'user','content':content}]}
+ try:
+  req=ureq.Request(base,data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','HTTP-Referer':'https://sepandyar.local','X-Title':'Sepandyar'},method='POST')
+  with ureq.urlopen(req,timeout=30) as r:
+   data=json.loads(r.read()); return data.get('choices',[{}])[0].get('message',{}).get('content')
+ except Exception: return None

@@ -38,7 +38,7 @@ def open_alert_once(c,atype,message,severity='normal'):
 # چهار سوییچ حریم خصوصی در رابط کاربری فقط در localStorage می‌ماندند و هرگز
 # به سرور نمی‌رسیدند، در حالی که consent_granted سه endpoint مراقب را قفل
 # می‌کرد. یعنی کنترل کاربر تشریفاتی بود.
-CONSENT_SCOPES=('health','wallet','screen_control','voice_profile','emergency_call',
+CONSENT_SCOPES=('health','wallet','screen_control','screen_vision','voice_profile','emergency_call',
                 'vitals','medications','location')
 
 def consent_granted(c,scope='health'):

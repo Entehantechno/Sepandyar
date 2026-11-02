@@ -150,14 +150,16 @@ def _bootstrap(c):
         ('ambiguous','refer_professional',refer_reply,['دوز دارو','مقدار دارو','دارو را قطع','قرص را قطع','چه بیماری دارم','چه‌ام هست','تداخل دارویی','جایگزین دارو','نسخه بنویس','تجویز کن'])]
  for lvl,act,reply,pats in rules:
   for pat in pats: c.execute('INSERT OR IGNORE INTO safety_rules(id,level,pattern,action,reply,updated_at) VALUES(?,?,?,?,?,?)',(lvl+'::'+pat,lvl,pat,act,reply,now()))
- apps=[('com.snappfood','اسنپ‌فود','خرید','🛍️',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'جست‌وجو','timeout_ms':9000},{'type':'input_text','payload':'شیر کم‌چرب','timeout_ms':6000},{'type':'ime_enter','payload':'','timeout_ms':5000},{'type':'tap_text','payload':'افزودن به سبد','timeout_ms':12000},{'type':'tap_text','payload':'سبد خرید','timeout_ms':9000}]),
+ apps=[('com.zoodfood.android.play','اسنپ‌فود','خرید','🛍️',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'جست‌وجو','timeout_ms':9000},{'type':'input_text','payload':'شیر کم‌چرب','timeout_ms':6000},{'type':'ime_enter','payload':'','timeout_ms':5000},{'type':'tap_text','payload':'افزودن به سبد','timeout_ms':12000},{'type':'tap_text','payload':'سبد خرید','timeout_ms':9000}],0),
        ('cab.snapp.passenger',
          'اسنپ',
          'تاکسی',
          '🚕',
-         [{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'کجا می‌روید','timeout_ms':9000},{'type':'input_text','payload':'خیابان ولیعصر','timeout_ms':6000},{'type':'ime_enter','payload':'','timeout_ms':5000},{'type':'tap_text','payload':'درخواست خودرو','timeout_ms':16000}]),
-       ('com.android.chrome','کروم','مرورگر','🌐',[{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'جست‌وجو یا وارد کردن نشانی','timeout_ms':9000},{'type':'input_text','payload':'نوبت پزشک','timeout_ms':6000},{'type':'ime_enter','payload':'','timeout_ms':5000,'expect':'نوبت پزشک'}])]
- for pkg,label,cat,icon,steps in apps: c.execute('INSERT OR IGNORE INTO approved_apps VALUES(?,?,?,?,?,?,?)',(pkg,label,cat,icon,json.dumps({'steps':steps},ensure_ascii=False),1,now()))
+         [{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'کجا می‌روید','timeout_ms':9000},{'type':'input_text','payload':'خیابان ولیعصر','timeout_ms':6000},{'type':'ime_enter','payload':'','timeout_ms':5000},{'type':'tap_text','payload':'درخواست خودرو','timeout_ms':16000}],0),
+       ('com.android.chrome','کروم','مرورگر','🌐',[{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'جست‌وجو یا وارد کردن نشانی','timeout_ms':9000},{'type':'input_text','payload':'نوبت پزشک','timeout_ms':6000},{'type':'ime_enter','payload':'','timeout_ms':5000,'expect':'نوبت پزشک'}],1),
+       ('ir.mci.ecareapp','همراه من','قبض و شارژ','📱',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'شارژ و بسته','timeout_ms':9000},{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'خرید شارژ','timeout_ms':9000},{'type':'wait','timeout_ms':2500}],0),
+       ('com.sibche.aspardproject.app','آپ','پرداخت قبض','💳',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'پرداخت قبض','timeout_ms':9000},{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'قبض موبایل','timeout_ms':9000},{'type':'wait','timeout_ms':2500}],0)]
+ for pkg,label,cat,icon,steps,verified in apps: c.execute('INSERT OR IGNORE INTO approved_apps VALUES(?,?,?,?,?,?,?)',(pkg,label,cat,icon,json.dumps({'steps':steps,'verified':verified},ensure_ascii=False),1,now()))
  lex=[('meds','داروهای من','meds',['دارو','قرص','داروها','داروی من','داروهایم'],'medicine pills blister pack on table',90),
       ('vitals','فشار خون و قند','vitals',['فشار','قند','فشار خون','قند خون','علائم حیاتی','وزن'],'home blood pressure monitor device',85),
       ('symptom','اعلام علامت و ناراحتی','symptom',['علامت','درد','سرگیجه','حالم بد','خوب نیستم','تهوع','تنگی نفس','ناراحت'],'elderly patient talking with nurse at home',80),

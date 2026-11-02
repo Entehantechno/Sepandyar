@@ -21,7 +21,11 @@ print('--- 1) کاتالوگ اپ‌های تأییدشده ---')
 s,j=req('/api/apps/approved'); check('GET /api/apps/approved 200',s==200,(s,j))
 items=j.get('items',[]); check('دست‌کم ۳ اپ تأییدشده',len(items)>=3,len(items))
 pkgs={x['package'] for x in items}
-check('اسنپ‌فود و اسنپ و کروم در فهرست‌اند',{'com.snappfood','cab.snapp.passenger','com.android.chrome'}<=pkgs,pkgs)
+# com.snappfood در مرحلهٔ ۲۴ اصلاح شد: آن شناسه هرگز متعلق به اسنپ‌فود نبود
+# و آن رسپی بی‌صدا شکست می‌خورد. شناسهٔ رسمی گوگل‌پلی com.zoodfood.android.play است.
+check('اسنپ‌فود و اسنپ و کروم و همراه‌من و آپ در فهرست‌اند',
+      {'com.zoodfood.android.play','cab.snapp.passenger','com.android.chrome',
+       'ir.mci.ecareapp','com.sibche.aspardproject.app'}<=pkgs,pkgs)
 bad=[x['package'] for x in items if not ((x.get('plan') or {}).get('steps'))]
 check('همه اپ‌ها برنامه گام دارند',not bad,bad)
 STEP_TYPES={'launch','wait','tap_text','tap_id','input_text','ime_enter','submit',
@@ -252,6 +256,10 @@ print('--- 8) گارد مبدأ پل + نمادهای بدون import (جایگ�
 _KT_BUILTIN={'Int','String','Boolean','Long','Float','Double','Any','Unit','List','Map','Set',
  'MutableList','MutableMap','MutableSet','Array','IntArray','Pair','Triple','Result','CharSequence',
  'Throwable','Exception','NumberFormatException','IllegalArgumentException','IllegalStateException'}
+# نوع‌های تودرتویی که از کلاس پایه به ارث می‌رسند و import نمی‌خواهند.
+# TakeScreenshotCallback و ScreenshotResult داخل AccessibilityService تعریف
+# شده‌اند؛ چون ScreenControlService از آن ارث می‌برد، بی‌قیدِ نام در دسترس‌اند.
+_KT_INHERITED_NESTED={'TakeScreenshotCallback','ScreenshotResult','GestureDescription','StrokeDescription'}
 _pkg_syms=set()
 _kt_files=sorted(fn for fn in os.listdir(KT) if fn.endswith('.kt'))
 for fn in _kt_files:
@@ -267,7 +275,7 @@ for fn in _kt_files:
     # به اشتباه گزارش نشود — بدون آن سه مثبت کاذب داشتیم.
     for _m in re.finditer(r'(?<![\w.])([A-Z]\w+)\s*\.\s*[A-Za-z_]',_c):
         _s=_m.group(1)
-        if _s in _KT_BUILTIN or _s in _imp or _s in _pkg_syms or _s.isupper(): continue
+        if _s in _KT_BUILTIN or _s in _imp or _s in _pkg_syms or _s in _KT_INHERITED_NESTED or _s.isupper(): continue
         if (fn,_s) not in [(a,b) for a,b,_ in _unresolved]: _unresolved.append((fn,_s,_m.group(0)[:40]))
 check('بخش۸ هیچ نماد Kotlin بدون import استفاده نشده (خطای کامپایل)',
       not _unresolved, _unresolved[:6])
@@ -282,7 +290,9 @@ check('بخش۸ پرچم روی نخ UI از onPageStarted به‌روز می‌
 check('بخش۸ پرچم در doUpdateVisitedHistory هم به‌روز می‌شود (تغییر مسیر/بازگشت)',
       'override fun doUpdateVisitedHistory' in main, '')
 _SENSITIVE=['saveServerUrl','runScreenTask','tvCommand','launchApprovedPackage',
-            'callCaregiver','saveVoiceProfile','setAssistantName','cancelScreenTask','bringAppToFront']
+            'callCaregiver','saveVoiceProfile','setAssistantName','cancelScreenTask','bringAppToFront',
+            'setNotificationsAllowed','setScreenVisionAllowed','captureScreenForVision',
+            'dismissAllNotifications','dismissNotification','openNotification']
 _noguard=[]
 for _fn in _SENSITIVE:
     _i=main.find('fun %s('%_fn)
@@ -331,8 +341,20 @@ check('بخش۹ Build برای نگهبان‌ها import شده',
 # یک کامنت هست که توضیح می‌دهد چرا از takeScreenshot استفاده «نمی‌کنیم»؛
 # بدون حذف کامنت، همان توضیح به‌شکل استفاده از آن خوانده می‌شد.
 _svc_code=strip_kotlin(svc)
-check('بخش۹ takeScreenshot بی‌صدا عمداً استفاده نشده (حریم سالمند)',
-      'takeScreenshot(' not in _svc_code, 'takeScreenshot در کد پیدا شد')
+# تصمیم اخلاقی، «به‌روزشده» در مرحلهٔ ۲۴.
+# در مرحلهٔ ۲۳ این سنجش می‌گفت takeScreenshot اصلاً استفاده نشود، چون روی
+# API 30 هیچ اعلان/نمایشگری ندارد. در مرحلهٔ ۲۴ بینایی روی تصویر افزوده شد
+# چون بدون آن اپ‌های فلاتر و canvas هیچ کمکی نمی‌گرفتند و readScreenText
+# رشتهٔ خالی می‌داد. پس گارد از «حذف مطلق» به «قرارداد حریم» تبدیل شد:
+# takeScreenshot مجاز است، اما فقط یک بار، فقط داخل captureForVision، و
+# announceCapture باید «پیش از» آن بیاید. حذف این گارد یعنی بازگشت به
+# تصویر گرفتن بی‌صدا از گوشی سالمند.
+_ts9=[m.start() for m in re.finditer(r'takeScreenshot\(',_svc_code)]
+_cvi9=_svc_code.find('fun captureForVision'); _cve9=_svc_code.find('fun announceCapture')
+check('بخش۹ takeScreenshot تنها یک بار و داخل captureForVision است',
+      len(_ts9)==1 and 0 < _cvi9 < _ts9[0] < _cve9, (_ts9,_cvi9,_cve9))
+check('بخش۹ گرفتن تصویر بی‌صدا نیست: نشانگر «پیش از» takeScreenshot می‌آید',
+      0 < _svc_code.find('announceCapture()',_cvi9) < _ts9[0], _svc_code.find('announceCapture()',_cvi9))
 check('بخش۹ مسیر جایگزین imeEnter برچسب‌های ارسال دارد',
       'SUBMIT_LABELS' in svc and 'جست‌وجو' in svc, '')
 
@@ -420,6 +442,176 @@ check('بخش۱۰ متدهای اعلان روی پل گارد مبدأ دارن
 # برچسب overlay برای هر گام تازه
 _nolabel=[t for t in NODE_STEPS+GLOBAL_STEPS if '"%s"'%t not in runner]
 check('بخش۱۰ همهٔ گام‌های تازه برچسب فارسی overlay دارند', not _nolabel, _nolabel)
+
+print('--- 11) یکسان‌سازی فارسی، رسپی‌های واقعی و بینایی صفحه (مرحلهٔ ۲۴) ---')
+import unicodedata as _ud11
+sel=open(os.path.join(KT,'SmartSelector.kt'),encoding='utf-8').read()
+main=open(os.path.join(KT,'MainActivity.kt'),encoding='utf-8').read()
+hnd=open(os.path.join(ROOT,'app','handler.py'),encoding='utf-8').read()
+mem=open(os.path.join(ROOT,'app','memory.py'),encoding='utf-8').read()
+web=open(os.path.join(ROOT,'index.html'),encoding='utf-8').read()
+
+# ۱۱٫۱) پنج باگ یکسان‌سازی که واقعاً تطبیق را می‌شکستند
+for _cp,_name in [('\u200C','نیم‌فاصله'),('\u0640','تطویل'),('\u0660','رقم عربی'),
+                  ('\u06F0','رقم فارسی'),('\u0623','الف همزه‌دار'),('\u0624','واو همزه‌دار'),
+                  ('\u06C0','نشانگر اضافه')]:
+    check('بخش۱۱ normalize به %s (U+%04X) می‌رسد'%(_name,ord(_cp)),
+          ('\\u%04X'%ord(_cp)) in sel, '\\u%04X'%ord(_cp))
+
+# ۱۱٫۲) منطق normalize — پورت وفادار. این اجرای Kotlin نیست (JVM نداریم)؛
+#        فقط منطق را می‌سنجد و باید کنار ./gradlew خوانده شود.
+def _norm11(v):
+    if not v: return ""
+    out=[]
+    for ch in v.lower():
+        if ch in '\u200c\u200d\u0640\u06c0': continue
+        elif ch=='\u064a': out.append('\u06cc')
+        elif ch=='\u0643': out.append('\u06a9')
+        elif ch=='\u0629': out.append('\u0647')
+        elif ch in '\u0623\u0625': out.append('\u0627')
+        elif ch=='\u0624': out.append('\u0648')
+        elif '\u0660'<=ch<='\u0669': out.append(chr(ord('0')+(ord(ch)-0x0660)))
+        elif '\u06f0'<=ch<='\u06f9': out.append(chr(ord('0')+(ord(ch)-0x06f0)))
+        else: out.append(ch)
+    t=re.sub('[\u064b-\u065f\u0670\u06d6-\u06ed]','',''.join(out))
+    t=''.join(c if (_ud11.category(c)[0] in 'LN' or c==' ') else ' ' for c in t)
+    return re.sub(r'\s+',' ',t).strip()
+_POS11=[('می‌رود','میرود'),('تأیید','تاييد'),('۱۲۳۴','١٢٣٤'),('۱۲۳۴','1234'),
+        ('تأیــید','تأیید'),('پیگیری','پيگيري'),('شركت','شرکت'),('شؤون','شوون'),
+        ('حملهٔ','حملهۀ'),('حملهٔ','حمله'),('مدرسة','مدرسه'),('خانهٔ من','خانه من')]
+_NEG11=[('آب','اب'),('مسئله','مسيله'),('شیر','شور')]
+_badpos=[(a,b) for a,b in _POS11 if _norm11(a)!=_norm11(b)]
+_badneg=[(a,b) for a,b in _NEG11 if _norm11(a)==_norm11(b)]
+check('بخش۱۱ ۱۲ جفت هم‌معنی یکسان می‌شوند', not _badpos, _badpos)
+check('بخش۱۱ آ و ئ مستقل می‌مانند (تطبیق کاذب ساخته نمی‌شود)', not _badneg, _badneg)
+
+# ۱۱٫۳) باگ نام بسته: اسنپ‌فود با شناسهٔ جعلی هرگز باز نمی‌شد
+check('بخش۱۱ شناسهٔ جعلی com.snappfood حذف شد', "'com.snappfood'" not in _dbsrc, 'com.snappfood')
+# این‌ها شناسهٔ رسمی گوگل‌پلی‌اند (جست‌وجوی وب، ۲۰۲۶). هر نام بیرون از این
+# فهرست یعنی حدس زده شده است.
+REAL11={'com.zoodfood.android.play':'اسنپ‌فود','cab.snapp.passenger':'اسنپ',
+        'com.android.chrome':'کروم','ir.mci.ecareapp':'همراه من',
+        'com.sibche.aspardproject.app':'آپ'}
+_pkgs11=[x['package'] for x in items]
+check('بخش۱۱ همهٔ بسته‌های رسپی شناسهٔ واقعی گوگل‌پلی دارند',
+      all(pk in REAL11 for pk in _pkgs11), [pk for pk in _pkgs11 if pk not in REAL11])
+check('بخش۱۱ همراه من و آپ افزوده شدند',
+      {'ir.mci.ecareapp','com.sibche.aspardproject.app'} <= set(_pkgs11), _pkgs11)
+check('بخش۱۱ هر رسپی نشانگر verified دارد',
+      all('verified' in (x.get('plan') or {}) for x in items),
+      [x['package'] for x in items if 'verified' not in (x.get('plan') or {})])
+
+# ۱۱٫۴) قاعدهٔ ایمنی: هیچ رسپی‌ای نباید پرداخت را «انجام» دهد.
+# تأیید مبلغ کار سالمند است، نه اتوماسیون. این هم با سیاست Google Play
+# سازگار است (agent مختار ممنوع) هم با اصل محصول.
+PAY11=['پرداخت','تأیید پرداخت','خرید نهایی','ثبت سفارش','تأیید و پرداخت','pay now','confirm payment']
+_pay=[(x['package'],st.get('payload')) for x in items
+      for st in (x['plan'] or {}).get('steps',[])
+      if str(st.get('payload') or '').strip() in PAY11]
+check('بخش۱۱ هیچ رسپی‌ای گام پرداخت ندارد', not _pay, _pay)
+
+# ۱۱٫۵) بینایی صفحه: سه قید حریم
+_cv=svc[svc.find('fun captureForVision'):]
+_cv=_cv[:_cv.find('\n    }\n')+5] if '\n    }\n' in _cv else _cv
+check('بخش۱۱ captureForVision پیاده شده', 'fun captureForVision(): String' in svc, '')
+check('بخش۱۱ رضایت اولین سطر است (پیش از هر کاری سنجیده می‌شود)',
+      _cv.strip().splitlines()[1].strip().startswith('if (!visionAllowed'), _cv.strip().splitlines()[1:3])
+check('بخش۱۱ کلید بینایی پیش‌فرض خاموش است',
+      'getBoolean(PREF_VISION, false)' in svc, 'getBoolean(PREF_VISION')
+# takeScreenshot روی API 30 بی‌صداست؛ اگر خودمان نشانگر نگذاریم سالمند هرگز
+# نمی‌فهمد از صفحه‌اش تصویر گرفته شده.
+_ann=svc.find('private fun announceCapture')
+_cap=svc.find('fun captureForVision')
+check('بخش۱۱ پیش از گرفتن تصویر نشانگر بصری نمایش داده می‌شود',
+      0 < _ann < svc.find('announceCapture()', _cap) or svc.find('announceCapture()', _cap) < svc.find('takeScreenshot(', _cap),
+      (_cap,_ann))
+check('بخش۱۱ نشانگر از OverlayController می‌آید نه toast گذرا',
+      'OverlayController.show' in svc[_ann:_ann+400], '')
+# روی متن بی‌کامنت: KDoc همین تابع توضیح می‌دهد چرا به MediaProjection
+# «نمی‌افتیم»، و آن توضیح بدون حذف کامنت به‌شکل استفاده خوانده می‌شد.
+check('بخش۱۱ زیر API 30 بی‌صدا خالی می‌دهد (MediaProjection جایگزین نمی‌شود)',
+      'Build.VERSION.SDK_INT < 30' in _cv and 'MediaProjection' not in _svc_code, 'MediaProjection')
+check('بخش۱۱ هیچ تصویری روی دیسک نوشته نمی‌شود',
+      not re.search(r'FileOutputStream|openFileOutput|MediaStore', svc), 'FileOutputStream')
+check('بخش۱۱ خطا استثنا نمی‌دهد بلکه رشتهٔ خالی می‌دهد (نخ پل جاوااسکریپت)',
+      _cv.count('return ""') >= 3, _cv.count('return ""'))
+
+# ۱۱٫۶) پل: سه متد تازه، همه پشت bridgeTrusted
+for _m in ('screenVisionAllowed','setScreenVisionAllowed','captureScreenForVision'):
+    _i=main.find('fun '+_m)
+    _b=main[_i:_i+260]
+    check('بخش۱۱ پل %s پشت bridgeTrusted است'%_m,
+          _i>0 and ('bridgeTrusted' in _b or _m=='screenVisionAllowed'), _b[:80])
+# readScreenText هم خواندنی است؛ اجازهٔ «خواندن» نباید خودِ «نوشتن» پرچم باشد.
+check('بخش۱۱ خواندن پرچم bridgeTrusted نمی‌خواهد ولی نوشتنش می‌خواهد',
+      'fun setScreenVisionAllowed(on: Boolean) {\n            if (!bridgeTrusted) return' in main, '')
+
+# ۱۱٫۷) سمت سرور: سه قید مستقل
+check('بخش۱۱ endpoint /api/screen/vision وجود دارد', "p=='/api/screen/vision'" in hnd, '')
+_ep=hnd[hnd.find("p=='/api/screen/vision'"):]
+_ep=_ep[:_ep.find("p=='/api/screen-tasks'")]
+check('بخش۱۱ رضایت screen_vision سمت سرور سنجیده می‌شود', "consent_granted(c,'screen_vision')" in _ep, '')
+check('بخش۱۱ اندازهٔ تصویر کران جدا از MAX_BODY_BYTES دارد', 'VISION_MAX_B64' in _ep and 'VISION_MAX_B64 = ' in hnd, '')
+check('بخش۱۱ محدودیت نرخ دارد', 'vision_rate_ok' in _ep, '')
+check('بخش۱۱ رویداد ثبت‌شده «بی‌محتوا» است (خودِ تصویر ذخیره نمی‌شود)',
+      "'screen_vision_read'" in _ep and 'img' not in _ep.split("'screen_vision_read'")[1].split(')')[0], '')
+check('بخش۱۱ حافظهٔ مکالمه به درخواست بینایی تزریق نمی‌شود',
+      'memory_block' not in mem[mem.find('def call_llm_vision'):], 'memory_block')
+
+# ۱۱٫۸) رابط کاربری: درخت گره «اول»، بینایی فقط وقتی خالی بود
+check('بخش۱۱ دکمهٔ «صفحه را برایم بخوان» روی پنل خانه هست',
+      'onclick="readScreenAloud()"' in web, '')
+_rs=web[web.find('async function readScreenAloud'):]
+_rs=_rs[:_rs.find('\n}\n')+3]
+check('بخش۱۱ ابتدا درخت گره خوانده می‌شود', _rs.find('readScreenText()') < _rs.find('captureScreenForVision()'), '')
+check('بخش۱۱ بینایی فقط در شاخهٔ «درخت خالی بود» است',
+      'if(!text){' in _rs and _rs.find('if(!text){') < _rs.find('captureScreenForVision()'), '')
+check('بخش۱۱ بینایی پشت رضایت صریح است', "localStorage.getItem('screenVision')!=='1'" in _rs, '')
+# پنجرهٔ ثابت ۱۶۰۰ نویسه‌ای تا داخل applySettings می‌رفت که خودش innerHTML
+# دارد؛ مثبت کاذب. بدنهٔ تابع با اولین «\nfunction » بعدی بسته می‌شود.
+_ni=web.find('function readNotificationsAloud'); _ne=web.find('\nfunction ',_ni+10)
+_rn=web[_ni:_ne if _ne>0 else _ni+2000]
+# سنجش ساختاری «نبودِ» یک نماد باید روی متن بی‌کامنت اجرا شود. کامنتِ همین
+# تابع توضیح می‌دهد چرا innerHTML استفاده «نمی‌شود» — دقیقاً همان دامی که در
+# مرحلهٔ ۲۳ با takeScreenshot خوردیم. خطوطی که با // شروع می‌شوند حذف
+# می‌شوند؛ نه همهٔ // ها، چون '//' داخل رشتهٔ نشانی وب معنای دیگری دارد.
+_rnc='\n'.join(l for l in _rn.split('\n') if not l.strip().startswith('//'))
+check('بخش۱۱ متن اعلان با textContent نوشته می‌شود نه innerHTML (XSS)',
+      'tr.textContent=' in _rnc and 'innerHTML' not in _rnc, _rnc[-160:])
+check('بخش۱۱ تابع خواندن اعلان واقعاً بسته شده (پنجره خالی نیست)',
+      len(_rnc)>400, len(_rnc))
+
+# ۱۱٫۹) نامتغیر بین‌لایه‌ای: هر بسته‌ای که سمت سرور seed می‌شود باید در
+# فهرست مجاز Kotlin هم باشد. این دقیقاً باگی است که در مرحلهٔ ۲۴ پیدا شد:
+# شناسهٔ اسنپ‌فود در database.py اصلاح شد ولی ApprovedApps در MainActivity.kt
+# همان شناسهٔ غلط را داشت؛ پس رسپی ثبت می‌شد و launchApprovedPackage همیشه
+# false می‌داد. اصلاحی که فقط یک لایه را بگیرد، اصلاح نیست.
+# تا «) در ابتدای خط». نسخهٔ نخست (.*?)\) بود و در اولین ) داخل «کامنت»
+# همان فهرست می‌ایستاد — کامنتم «(۲۰۲۶)» داشت — پس مجموعه خالی درآمد و هر
+# پنج بسته بی‌دلیل «غیرمجاز» گزارش شدند. کامنت نباید بتواند یک سنجش را
+# بشکند؛ این همان دامی است که با takeScreenshot و innerHTML هم خوردیم.
+_allow=re.search(r'private val ApprovedApps = setOf\(([\s\S]*?)\n\)', main)
+check('بخش۱۱ فهرست مجاز ApprovedApps پیدا می‌شود', bool(_allow), '')
+_allowset=set(re.findall(r'"([\w.]+)"', _allow.group(1))) if _allow else set()
+# سنجش تهی: اگر استخراج مجموعه خالی بدهد، سنجش بعدی همه را «غیرمجاز» می‌گوید
+# و باگ واقعی پنهان می‌شود. پس خالی بودن خودش یک شکست جداست.
+check('بخش۱۱ فهرست مجاز خالی استخراج نشد (سنجش تهی نیست)', len(_allowset)>=5, sorted(_allowset))
+check('بخش۱۱ شناسهٔ جعلی com.snappfood از فهرست مجاز Kotlin هم رفته',
+      'com.snappfood' not in _allowset, _allowset)
+_notallow=[x['package'] for x in items if x['package'] not in _allowset]
+check('بخش۱۱ هر بستهٔ سرور در فهرست مجاز Kotlin هم هست (وگرنه رسپی هرگز اجرا نمی‌شود)',
+      not _notallow, _notallow)
+
+# ۱۱٫۱۰) توازن کروشه/پرانتز روی همهٔ فایل‌ها با strip_kotlin.
+# نکته: پاره‌کنندهٔ سادهٔ «اول کامنت، بعد رشته» روی MainActivity مثبت کاذب
+# ۱۳/۱۰ می‌داد، چون رشتهٔ "https://" را کامنت می‌دید و بقیهٔ خط — از جمله
+# یک «{» — را می‌خورد. strip_kotlin توکنایزر است و این دام را ندارد.
+_unbal=[]
+for _fn in sorted(f for f in os.listdir(KT) if f.endswith('.kt')):
+    _k=strip_kotlin(open(os.path.join(KT,_fn),encoding='utf-8').read())
+    if _k.count('{')!=_k.count('}') or _k.count('(')!=_k.count(')'):
+        _unbal.append((_fn,_k.count('{'),_k.count('}'),_k.count('('),_k.count(')')))
+check('بخش۱۱ کروشه و پرانتز همهٔ فایل‌های Kotlin متوازن است', not _unbal, _unbal)
 
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)

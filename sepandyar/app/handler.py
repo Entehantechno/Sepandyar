@@ -22,7 +22,7 @@ from .database import db
 from .domain import as_hhmm,distance_m,in_quiet_window,share_payload
 from .language import DEFAULT_PATIENCE_MS,assess_risk,fetch_images,find_alias,get_voice_profile,is_smalltalk,learn_alias,match_candidates,normalize_dialect
 from .live import LIVE_MODEL,LIVE_TOKENS_LIMIT,LIVE_VOICE,LIVE_WS_BASE,fetch_live_token,live_system_prompt,live_token_payload,live_vad_config
-from .memory import MEMORY_TURNS,call_llm,conversation_summary,recall,remember
+from .memory import MEMORY_TURNS,call_llm,call_llm_vision,conversation_summary,recall,remember
 from .primitives import as_float,as_int,as_text,body,idem_key,rows,send
 from .proactive import collect_due_prompts,escalate_stale_prompts
 from .report import report_html
@@ -33,6 +33,36 @@ from .vitals import baseline_report,detect_deviation_alerts,evaluate_vital
 # ================= بخش ۱۳: هندلر HTTP و همهٔ مسیرهای API =================
 # هر مسیر یک «if p==...» است. مسیرهای /api/caregiver/* باید caregiver_session()
 # را صدا بزنند؛ آزمون بخش ۲۳ این قاعده را به‌طور ساختاری پاس می‌دارد.
+# ── خواندن صفحه با بینایی ────────────────────────────────────────────────────
+# تصویر صفحهٔ سالمند می‌تواند پیامک، موجودی بانکی و نام داروها را در بر
+# داشته باشد. پس سه قید مستقل گذاشته شده، نه یکی:
+#   رضایت ثبت‌شده روی سرور  +  کران اندازهٔ تصویر  +  محدودیت نرخ.
+# پرچم روی دستگاه به‌تنهایی کافی نیست، چون دستگاه سمت کلاینت است.
+VISION_RATE_LIMIT = 6
+VISION_RATE_WINDOW_S = 60
+VISION_MAX_B64 = 400_000
+VISION_IP_CAP = 1024
+_VISION_HITS = {}
+_VISION_LOCK = threading.Lock()
+
+
+def vision_rate_ok(ip):
+    """پنجرهٔ لغزان ساده. بی‌قفل رها کردنش race می‌سازد که از سقف رد می‌شود."""
+    t = time.time()
+    with _VISION_LOCK:
+        # رشد نامتناهی dict: با هزاران کلاینت این map هرگز کوچک نمی‌شد.
+        if len(_VISION_HITS) > VISION_IP_CAP:
+            for k in [k for k, v in _VISION_HITS.items() if not v or t - v[-1] >= VISION_RATE_WINDOW_S]:
+                del _VISION_HITS[k]
+        hits = [x for x in _VISION_HITS.get(ip, ()) if t - x < VISION_RATE_WINDOW_S]
+        if len(hits) >= VISION_RATE_LIMIT:
+            _VISION_HITS[ip] = hits
+            return False
+        hits.append(t)
+        _VISION_HITS[ip] = hits
+        return True
+
+
 class Handler(SimpleHTTPRequestHandler):
  # تایم‌اوت سوکت، وگرنه هر اتصال نیمه‌باز یک رشته را برای همیشه نگه می‌دارد.
  # timeout در زنجیرهٔ ارث None است و StreamRequestHandler.setup() فقط وقتی آن
@@ -726,6 +756,22 @@ class Handler(SimpleHTTPRequestHandler):
     learned=learn_alias(c,row['transcript'],chosen,'disambiguation',str(d.get('profile') or 'default'))
    c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'disambiguation_resolved',json.dumps({'chosen':chosen,'transcript':row['transcript']},ensure_ascii=False),now())); c.commit()
    return send(self,200,{'ok':True,'action':lex['action'] if lex else None,'label':lex['label'] if lex else chosen,'learned':learned,'aliases':c.execute('SELECT COUNT(*) FROM utterance_aliases').fetchone()[0]})
+  if p=='/api/screen/vision':
+   # رضایت سالمند، ثبت‌شده روی سرور. پرچم روی دستگاه جای این را نمی‌گیرد.
+   if not consent_granted(c,'screen_vision'): return send(self,403,{'error':'senior_consent_not_granted','message':'برای خواندن صفحه با بینایی، ابتدا رضایت خود را در بخش حریم خصوصی ثبت کنید.'})
+   img=as_text(d.get('image') or '')
+   if not img: return send(self,400,{'error':'image_required','message':'تصویری ارسال نشد.'})
+   # کران دوم: MAX_BODY_BYTES اندازهٔ کل بدنه را می‌بندد، ولی یک تصویر
+   # «معتبر» هم می‌تواند چند مگابایت باشد و هر فراخوانی یک درخواست گران
+   # به مدل بیرونی است.
+   if len(img)>VISION_MAX_B64: return send(self,413,{'error':'image_too_large','message':'تصویر بزرگ‌تر از حد مجاز است.','max_chars':VISION_MAX_B64})
+   if not vision_rate_ok(self.client_address[0]): return send(self,429,{'error':'rate_limited','message':'کمی صبر کنید؛ خواندن صفحه پشت‌سرهم ممکن نیست.','retry_after_s':VISION_RATE_WINDOW_S})
+   _pr=d.get('prompt'); txt=call_llm_vision(c,img,_pr if isinstance(_pr,str) else None)
+   # هیچ تصویری ذخیره نمی‌شود. تنها یک رویداد «بی‌محتوا» ثبت می‌شود تا
+   # فراوانی استفاده قابل ردیابی باشد بدون اینکه خودِ محتوا بماند.
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'screen_vision_read',json.dumps({'ok':bool(txt),'chars':len(txt or '')},ensure_ascii=False),now())); c.commit()
+   if not txt: return send(self,502,{'error':'vision_unavailable','message':'خواندن صفحه با بینایی الان ممکن نیست.'})
+   return send(self,200,{'ok':True,'text':txt})
   if p=='/api/screen-tasks':
    rid=str(uuid.uuid4())
    st_tot=as_int(d.get('steps_total') or 0); st_done=as_int(d.get('steps_done') or 0)
