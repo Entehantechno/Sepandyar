@@ -30,6 +30,32 @@
                  android:label="سپندیار — اعلان‌ها">
             <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
         </service>
+        <!--
+          لایهٔ ۱: سرویس AppFunctions که KSP از @AppFunctionServiceEntryPoint
+          تولید می‌کند.
+
+          نام سرویس و نام فایل XML «عمداً» در دو جا تکرار شده‌اند: در
+          آرگومان‌های همان annotation و اینجا. اگر این دو از هم جدا بیفتند،
+          system_server سرویس را bind می‌کند ولی فهرست توابع خالی است — و
+          build هم سبز می‌ماند. §۱۵ همین هم‌خوانی را پاس می‌دارد.
+
+          BIND_APP_FUNCTION_SERVICE قفل است: فقط system_server کلیدش را دارد،
+          پس یک اپ دیگر نمی‌تواند مستقیم bind کند و توابع ما را صدا بزند.
+          حذفش یعنی باز کردن توابع به هر فراخوان سوم‌شخص روی دستگاه.
+
+          android:exported="true" اینجا «عمدی» و درست است — برخلاف قاعدهٔ
+          همیشگی ما. سرویس باید برای system_server قابل bind باشد؛ امنیتش
+          با همان مجوز امضامحور تأمین می‌شود نه با exported=false.
+        -->
+        <service android:name=".appfunctions.SepandyarAppFunctionService"
+                 android:permission="android.permission.BIND_APP_FUNCTION_SERVICE"
+                 android:exported="true">
+            <intent-filter>
+                <action android:name="android.app.appfunctions.AppFunctionService" />
+            </intent-filter>
+            <property android:name="android.app.appfunctions"
+                      android:value="sepandyar_app_functions.xml" />
+        </service>
         <service android:name=".ScreenControlService" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="false">
             <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config" />

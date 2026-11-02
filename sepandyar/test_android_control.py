@@ -942,6 +942,109 @@ check('بخش۱۴ هیچ خراشیدن UI در مسیر App Actions نیست',
 check('بخش۱۴ دارایی اندروید با onAppAction همگام است',
       open(os.path.join(AND,'app/src/main/assets/index.html'),encoding='utf-8').read()==web, '')
 
+print('--- 15) لایهٔ ۱: AppFunctions ---')
+_af15p=os.path.join(KT,'appfunctions','SepandyarAppFunctions.kt')
+check('بخش۱۵ فایل AppFunctions وجود دارد', os.path.exists(_af15p), _af15p)
+_af15=open(_af15p,encoding='utf-8').read()
+# سنجش‌های ساختاری روی نسخهٔ «بی‌کامنت و بی‌رشته». شش سنجش نخست این بخش
+# با شمارش خام نوشته شده بودند و KDocهای توضیحیِ خودم آن‌ها را واژگون کرد
+# (مثلاً عبارت «@AppFunctionDeclaration» داخل توضیحات، تعداد annotationها را
+# ۹ به ۱۱ رساند). همان دمی که در §۱۱٫۹ و §۹ هم خورده بودیم.
+_af15c=strip_kotlin(_af15)
+def _fnbody15(name, src):
+    i=src.find('suspend fun %s('%name)
+    if i<0: return ''
+    j=src.find('{',i); d=0
+    for k in range(j,len(src)):
+        if src[k]=='{': d+=1
+        elif src[k]=='}':
+            d-=1
+            if d==0: return src[i:k+1]
+    return src[i:]
+
+# ۱۵٫۱) دام alpha13: @AppFunction قدیمی «کامپایل می‌شود» ولی KSP بی‌صدا
+# XML خالی می‌سازد. بدترین نوع شکست — build سبز، صفر تابع.
+check('بخش۱۵ از @AppFunctionDeclaration استفاده می‌شود نه @AppFunction قدیمی',
+      '@AppFunctionDeclaration' in _af15 and '@AppFunction(' not in _af15, '')
+# ۱۵٫۲) دام beta01: isDescribedByKDoc مقدار پیش‌فرض ندارد.
+_nd15=_af15c.count('@AppFunctionDeclaration')+_af15c.count('@AppFunctionSerializable')
+_kdoc15=len(re.findall(r'isDescribedByKDoc\s*=\s*true',_af15c))
+check('بخش۱۵ هر declaration و serializable صریحاً isDescribedByKDoc=true دارد',
+      _kdoc15==_nd15 and _nd15>=5, (_kdoc15,_nd15))
+# ۱۵٫۳) دام alpha10: توابع باید «داخل» کلاسِ entry-point باشند.
+_ep15=re.search(r'@AppFunctionServiceEntryPoint\(([^)]*)\)',_af15,re.S)
+check('بخش۱۵ @AppFunctionServiceEntryPoint هست', bool(_ep15), '')
+check('بخش۱۵ کلاس entry-point از AppFunctionService ارث می‌برد',
+      ': AppFunctionService()' in _af15, '')
+_ep_end15=_af15.find('@AppFunctionServiceEntryPoint')
+_first_fn15=_af15.find('suspend fun')
+check('بخش۱۵ توابع «بعد از» entry-point تعریف شده‌اند (داخل همان کلاس)',
+      0 <= _ep_end15 < _first_fn15, (_ep_end15,_first_fn15))
+check('بخش۱۵ پارامتر AppFunctionContext حذف شده (در beta01 وجود ندارد)',
+      'AppFunctionContext' not in _af15, '')
+# ۱۵٫۴) دام alpha09: appfunctions-service دیگر منتشر نمی‌شود.
+_gb15=open(os.path.join(AND,'app/build.gradle.kts'),encoding='utf-8').read()
+_gb15c=strip_kotlin(_gb15)
+check('بخش۱۵ وابستگی منسوخ appfunctions-service افزوده نشده',
+      'appfunctions-service' not in _gb15c, '')
+check('بخش۱۵ نسخهٔ beta01 پین شده', 'appfunctions:1.0.0-beta01' in _gb15 and
+      'appfunctions-compiler:1.0.0-beta01' in _gb15, '')
+check('بخش۱۵ پلاگین KSP اعمال شده', 'com.google.devtools.ksp' in _gb15 and
+      'com.google.devtools.ksp' in open(os.path.join(AND,'build.gradle.kts'),encoding='utf-8').read(), '')
+check('بخش۱۵ compileSdk >= 37 و targetSdk >= 36 (پیش‌نیاز Android 16)',
+      'compileSdk = 37' in _gb15 and 'targetSdk = 36' in _gb15, '')
+
+# ۱۵٫۵) مهم‌ترین سنجش: هم‌خوانی نام‌ها بین annotation و manifest.
+# اگر این دو جدا بیفتند، system_server سرویس را bind می‌کند ولی فهرست
+# توابع خالی است و build هم سبز می‌ماند.
+_svcname15=re.search(r'serviceName\s*=\s*"([^"]+)"',_af15)
+_xmlname15=re.search(r'appFunctionXmlFileName\s*=\s*"([^"]+)"',_af15)
+check('بخش۱۵ serviceName و appFunctionXmlFileName در annotation هستند',
+      bool(_svcname15) and bool(_xmlname15), '')
+_mf15b=open(os.path.join(AND,'app/src/main/AndroidManifest.xml'),encoding='utf-8').read()
+_regname15=re.search(r'android:name="([^"]*%s)"'%re.escape(_svcname15.group(1)),_mf15b)
+check('بخش۱۵ سرویس تولیدشده در manifest ثبت شده', bool(_regname15), _svcname15.group(1))
+_prop15=re.search(r'android\.app\.appfunctions"\s*\n?\s*android:value="([^"]+)"',_mf15b)
+check('بخش۱۵ property متادیتا با appFunctionXmlFileName یکی است',
+      bool(_prop15) and _prop15.group(1)==_xmlname15.group(1)+'.xml',
+      (_prop15.group(1) if _prop15 else None, _xmlname15.group(1)))
+check('بخش۱۵ سرویس با BIND_APP_FUNCTION_SERVICE محافظت می‌شود',
+      'BIND_APP_FUNCTION_SERVICE' in _mf15b, '')
+check('بخش۱۵ action سرویس درست است',
+      'android.app.appfunctions.AppFunctionService' in _mf15b, '')
+check('بخش۱۵ سرویس exported است (بدون آن system_server نمی‌تواند bind کند)',
+      re.search(r'SepandyarAppFunctionService"[\s\S]{0,220}?android:exported="true"',_mf15b) is not None, '')
+
+# ۱۵٫۶) قاعدهٔ ایمنی: هیچ تابعی کار بازگشت‌ناپذیر «انجام» نمی‌دهد.
+# فقط توابعِ واقعاً AppFunction. نسخهٔ نخست هر `suspend fun` را می‌گرفت و
+# دو هلپر خصوصی HTTP را هم جزو توابع می‌شمرد، پس سنجش KDoc و withContext
+# روی آن‌ها بی‌معنا شکست می‌خورد.
+_fns15=re.findall(r'@AppFunctionDeclaration\(isDescribedByKDoc = true\)\s*suspend fun (\w+)\(',_af15c)
+check('بخش۱۵ همهٔ توابع suspend هستند', len(_fns15)>=5, _fns15)
+check('بخش۱۵ سنجش تهی نیست: دست‌کم ۵ تابع اعلام شد', len(_fns15)>=5, len(_fns15))
+_mut15=[f for f in _fns15 if f.startswith(('request','create','book','pay','send','delete'))]
+_badmut=[f for f in _mut15 if 'EnqueuedAction' not in _af15[_af15.find('suspend fun %s('%f):_af15.find('suspend fun %s('%f)+300]]
+check('بخش۱۵ هر تابعِ تغییردهنده فقط «صف» می‌کند نه اجرا', not _badmut, _badmut)
+check('بخش۱۵ صف تأیید صریح است (needsConfirmation)',
+      'needsConfirmation' in _af15 and 'needsConfirmation = true' in _af15, '')
+check('بخش۱۵ راه لغو به عامل برگردانده می‌شود', 'cancelHint' in _af15, '')
+check('بخش۱۵ تابع کیف پول فقط خواندنی است',
+      'WalletBalance(' in _af15 and 'postJson("/api/wallet"' not in _af15, '')
+_taxi15=_fnbody15('requestTaxiRide',_af15c)
+check('بخش۱۵ بدنهٔ تابع تاکسی تهی استخراج نشد (سنجش تهی نیست)',
+      len(_taxi15)>80 and 'EnqueuedAction' in _taxi15, len(_taxi15))
+check('بخش۱۵ تابع تاکسی سفر را «ثبت» نمی‌کند',
+      'api/taxi' not in _taxi15 and 'postJson' not in _taxi15 and 'getJson' not in _taxi15, '')
+
+# ۱۵٫۷) KDoc یعنی prompt؛ بی‌KDoc یعنی ابزارِ بی‌توصیف.
+_nodoc=[f for f in _fns15 if not re.search(r'/\*\*[\s\S]{0,600}?\*/\s*@AppFunctionDeclaration\(isDescribedByKDoc = true\)\s*suspend fun %s\('%f,_af15)]
+check('بخش۱۵ هر تابع KDoc دارد (همان چیزی که مدل می‌خواند)', not _nodoc, _nodoc)
+check('بخش۱۵ فراخوانی شبکه از نخ UI خارج می‌شود (وگرنه ANR)',
+      _af15.count('withContext(Dispatchers.IO)')==len(_fns15), (_af15.count('withContext(Dispatchers.IO)'),len(_fns15)))
+check('بخش۱۵ timeout شبکه دارد', 'connectTimeout' in _af15 and 'readTimeout' in _af15, '')
+check('بخش۱۵ هیچ API دسترس‌پذیری در این فایل نیست',
+      not any(k in _af15c for k in ('AccessibilityService','AccessibilityNodeInfo','dispatchGesture')), '')
+
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)
 print('Stage-3 Android control test passed')
