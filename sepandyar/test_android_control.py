@@ -35,8 +35,28 @@ STEP_TYPES={'launch','wait','tap_text','tap_id','input_text','ime_enter','submit
             'copy','cut','paste','clear_text','append_text','expand','collapse',
             'set_progress','double_tap','pinch','drag','dismiss_notifications',
             'split_screen','headset_hook','a11y_all_apps','a11y_home','a11y_back','a11y_recents','confirm'}
-unknown=[(x['package'],st.get('type')) for x in items for st in (x['plan'] or {}).get('steps',[]) if st.get('type') not in STEP_TYPES]
+# دو واژگانِ جدا. افزودن goto/set_css به STEP_TYPES غلط است: آن‌وقت یک
+# رسپی «بومی» می‌تواند از آن‌ها استفاده کند و performStep بی‌صدا false
+# برگرداند. هر دسته فقط در واژگان خودش مجاز است.
+WEB_STEP_TYPES={'goto','wait_ms','wait_css','click_css','set_css','read_css','probe','confirm'}
+def _mode_of(x): return (x['plan'] or {}).get('mode') or 'native'
+native_items=[x for x in items if _mode_of(x)=='native']
+web_items=[x for x in items if _mode_of(x)=='web']
+check('سنجش تهی نیست: هم رسپی بومی هست هم وب', bool(native_items) and bool(web_items),
+      (len(native_items), len(web_items)))
+unknown=[(x['package'],st.get('type')) for x in native_items for st in (x['plan'] or {}).get('steps',[]) if st.get('type') not in STEP_TYPES]
 check('همه نوع گام‌ها معتبرند',not unknown,unknown)
+unknown_web=[(x['package'],st.get('type')) for x in web_items for st in (x['plan'] or {}).get('steps',[]) if st.get('type') not in WEB_STEP_TYPES]
+check('گام‌های رسپی وب در واژگان وب معتبرند',not unknown_web,unknown_web)
+_cross=[(x['package'],st.get('type')) for x in web_items for st in (x['plan'] or {}).get('steps',[])
+        if st.get('type') in STEP_TYPES and st.get('type') not in WEB_STEP_TYPES]
+check('گام بومی به رسپی وب نشت نکرده (وگرنه هیچ‌کس اجرایش نمی‌کند)',not _cross,_cross)
+_wt=open(os.path.join(KT,'WebTaskRunner.kt'),encoding='utf-8').read()
+_unimpl=[t for t in sorted({st.get('type') for x in web_items for st in (x['plan'] or {}).get('steps',[])})
+         if '"%s"'%t not in _wt]
+check('هر گام وب در WebTaskRunner پیاده شده (بی‌صدا حذف نمی‌شود)',not _unimpl,_unimpl)
+check('WebTaskRunner گام ناشناخته را true نمی‌دهد (else -> false)',
+      'else -> "false"' in _wt, '')
 check('گام‌های لمس/ورودی متن دارای payload هستند',all(st.get('payload') for x in items for st in (x['plan'] or {}).get('steps',[]) if st['type'] in ('tap_text','input_text')),'')
 
 print('--- 2) قرارداد لایه‌ها: سرور ↔ Kotlin ↔ وب ---')
@@ -44,7 +64,10 @@ svc=open(os.path.join(KT,'ScreenControlService.kt'),encoding='utf-8').read()
 block=svc[svc.find('fun performStep'):]
 block=block[:block.find('\n    }\n')+5] if '\n    }\n' in block else block
 kotlin_types=set(re.findall(r'"([a-z_]+)"',block))
-server_types={st['type'] for x in items for st in (x['plan'] or {}).get('steps',[])}
+# فقط رسپی‌های بومی: گام‌های وب هرگز به performStep نمی‌رسند،
+# بلکه در WebTaskRunner اجرا می‌شوند.
+server_types={st['type'] for x in items if ((x['plan'] or {}).get('mode') or 'native')=='native'
+              for st in (x['plan'] or {}).get('steps',[])}
 # گام‌هایی که «عمداً» در performStep نیستند: یک لایه بالاتر، در
 # ScreenTaskRunner، اجرا می‌شوند. confirm هیچ کنش دسترس‌پذیری ندارد — کارش
 # متوقف کردن اجرا تا تأیید صریح سالمند است، و ورودش به performStep یعنی
@@ -266,7 +289,10 @@ print('--- 8) گارد مبدأ پل + نمادهای بدون import (جایگ�
 #  ۲) پل بومی باید در «زمان فراخوانی» مبدأ را بسنجد.
 _KT_BUILTIN={'Int','String','Boolean','Long','Float','Double','Any','Unit','List','Map','Set',
  'MutableList','MutableMap','MutableSet','Array','IntArray','Pair','Triple','Result','CharSequence',
- 'Throwable','Exception','NumberFormatException','IllegalArgumentException','IllegalStateException'}
+ 'Throwable','Exception','NumberFormatException','IllegalArgumentException','IllegalStateException',
+ # java.lang.* در Kotlin پیش‌فرض import می‌شود؛ نبودِ System در این فهرست
+ # باعث شد System.currentTimeMillis() خطای کامپایل گزارش شود.
+ 'System','Math','Integer','StringBuilder','Thread','Runnable'}
 # نوع‌های تودرتویی که از کلاس پایه به ارث می‌رسند و import نمی‌خواهند.
 # TakeScreenshotCallback و ScreenshotResult داخل AccessibilityService تعریف
 # شده‌اند؛ چون ScreenControlService از آن ارث می‌برد، بی‌قیدِ نام در دسترس‌اند.
@@ -275,12 +301,18 @@ _pkg_syms=set()
 _kt_files=sorted(fn for fn in os.listdir(KT) if fn.endswith('.kt'))
 for fn in _kt_files:
     _src=open(os.path.join(KT,fn),encoding='utf-8').read()
-    _pkg_syms|=set(re.findall(r'\b(?:class|object|interface|enum class|data class|sealed class|fun)\s+(\w+)',_src))
+    # val/var سطح-فایل هم اضافه شد: ApprovedApps یک private val است و
+    # بدون این، هم‌فایل بودنش دیده نمی‌شد و «بدون import» گزارش می‌شد.
+    _pkg_syms|=set(re.findall(r'\b(?:class|object|interface|enum class|data class|sealed class|fun|val|var)\s+(\w+)',_src))
 _unresolved=[]
 for fn in _kt_files:
     _c=open(os.path.join(KT,fn),encoding='utf-8').read()
-    _c=re.sub(r'/\*.*?\*/','',_c,flags=re.S); _c=re.sub(r'//.*','',_c)
+    # ترتیب مهم است: اول رشتهٔ خام ("""...""")، بعد رشتهٔ معمولی، بعد
+    # کامنت. اگر کامنت اول بیاید، "https://" بقیهٔ خط را می‌خورد؛ اگر
+    # رشتهٔ خام پوشش نداشته باشد، جاوااسکریپتِ داخلش کد Kotlin دیده می‌شود.
+    _c=re.sub(r'""".*?"""','""',_c,flags=re.S)
     _c=re.sub(r'"(?:\\.|[^"\\])*"','""',_c)
+    _c=re.sub(r'/\*.*?\*/','',_c,flags=re.S); _c=re.sub(r'//.*','',_c)
     _imp={i.split('.').pop().strip() for i in re.findall(r'^import\s+([\w.]+)',_c,re.M)}
     # (?<![\w.]) تا نمادِ وسطِ یک مسیرِ کاملاً واجد (مثل android.graphics.Typeface)
     # به اشتباه گزارش نشود — بدون آن سه مثبت کاذب داشتیم.
@@ -503,9 +535,24 @@ check('بخش۱۱ شناسهٔ جعلی com.snappfood حذف شد', "'com.snappf
 REAL11={'com.zoodfood.android.play':'اسنپ‌فود','cab.snapp.passenger':'اسنپ',
         'com.android.chrome':'کروم','ir.mci.ecareapp':'همراه من',
         'com.sibche.aspardproject.app':'آپ'}
-_pkgs11=[x['package'] for x in items]
+# شناسهٔ گوگل‌پلی فقط برای رسپی‌های «بومی» معنا دارد: مسیر وب هیچ بسته‌ای
+# launch نمی‌کند، پس شناسهٔ web.* عمداً در REAL11 نیست.
+_pkgs11=[x['package'] for x in items if ((x['plan'] or {}).get('mode') or 'native')=='native']
+_webpkgs11=[x['package'] for x in items if (x['plan'] or {}).get('mode')=='web']
 check('بخش۱۱ همهٔ بسته‌های رسپی شناسهٔ واقعی گوگل‌پلی دارند',
       all(pk in REAL11 for pk in _pkgs11), [pk for pk in _pkgs11 if pk not in REAL11])
+# در عوض، رسپی وب باید سه چیز داشته باشد وگرنه موتور نمی‌تواند اجرایش کند.
+_badweb=[x['package'] for x in items if (x['plan'] or {}).get('mode')=='web'
+         and not str((x['plan'] or {}).get('url') or '').startswith('https://')]
+check('بخش۱۱ هر رسپی وب نشانی https دارد', not _badweb, _badweb)
+_nosel=[x['package'] for x in items if (x['plan'] or {}).get('mode')=='web'
+        and 'selectors_verified' not in (x['plan'] or {})]
+check('بخش۱۱ هر رسپی وب پرچم selectors_verified دارد', not _nosel, _nosel)
+_premature=[x['package'] for x in items if (x['plan'] or {}).get('mode')=='web'
+            and (x['plan'] or {}).get('selectors_verified')
+            and any(not st.get('payload') for st in (x['plan'] or {}).get('steps',[])
+                    if st['type'] in ('wait_css','click_css','set_css'))]
+check('بخش۱۱ رسپی وب با سلکتور خالی نمی‌تواند verified باشد', not _premature, _premature)
 check('بخش۱۱ همراه من و آپ افزوده شدند',
       {'ir.mci.ecareapp','com.sibche.aspardproject.app'} <= set(_pkgs11), _pkgs11)
 check('بخش۱۱ هر رسپی نشانگر verified دارد',
@@ -609,9 +656,14 @@ _allowset=set(re.findall(r'"([\w.]+)"', _allow.group(1))) if _allow else set()
 check('بخش۱۱ فهرست مجاز خالی استخراج نشد (سنجش تهی نیست)', len(_allowset)>=5, sorted(_allowset))
 check('بخش۱۱ شناسهٔ جعلی com.snappfood از فهرست مجاز Kotlin هم رفته',
       'com.snappfood' not in _allowset, _allowset)
-_notallow=[x['package'] for x in items if x['package'] not in _allowset]
+_notallow=[x['package'] for x in items if ((x['plan'] or {}).get('mode') or 'native')=='native'
+           and x['package'] not in _allowset]
 check('بخش۱۱ هر بستهٔ سرور در فهرست مجاز Kotlin هم هست (وگرنه رسپی هرگز اجرا نمی‌شود)',
       not _notallow, _notallow)
+# سنجش مثبت: شناسهٔ وب هرگز نباید وارد ApprovedApps شود. اگر روزی شد،
+# یعنی کسی فرض کرده مسیر وب هم بسته launch می‌کند — و آن فرض غلط است.
+_leaked=[pk for pk in _webpkgs11 if pk in _allowset]
+check('بخش۱۱ شناسهٔ وب به فهرست مجاز Kotlin نشت نکرده', not _leaked, _leaked)
 
 # ۱۱٫۱۰) توازن کروشه/پرانتز روی همهٔ فایل‌ها با strip_kotlin.
 # نکته: پاره‌کنندهٔ سادهٔ «اول کامنت، بعد رشته» روی MainActivity مثبت کاذب
@@ -697,6 +749,103 @@ check('بخش۱۲ رسپی اسنپ مقصد ثابت ندارد',
       'خیابان ولیعصر' not in _dbsrc and '{{destination}}' in _dbsrc, '')
 check('بخش۱۲ رسپی اسنپ‌فود کالای ثابت ندارد',
       'شیر کم‌چرب' not in _dbsrc and '{{item}}' in _dbsrc, '')
+
+print('--- 13) مسیر وب: نسخهٔ وب سرویس‌ها داخل WebView ---')
+_wt=open(os.path.join(KT,'WebTaskRunner.kt'),encoding='utf-8').read()
+
+# ۱۳٫۱) پایهٔ حقوقی کل این مسیر: هیچ استفاده‌ای از AccessibilityService.
+# اگر روزی این API وارد WebTaskRunner شود، بهانهٔ «مشمول سیاست Play
+# نیستیم» از بین می‌رود و کل مسیر بیهوده می‌شود.
+_A11Y13=['AccessibilityService','AccessibilityNodeInfo','dispatchGesture',
+         'GestureDescription','performGlobalAction','takeScreenshot']
+_used13=[k for k in _A11Y13 if k in _wt]
+check('بخش۱۳ WebTaskRunner هیچ API دسترس‌پذیری استفاده نمی‌کند', not _used13, _used13)
+check('بخش۱۳ فقط evaluateJavascript است نه loadUrl("javascript:")',
+      'evaluateJavascript' in _wt and 'javascript:' not in _wt, '')
+
+# ۱۳٫۲) هر نوع گام وب باید هم اسکریپت داشته باشد هم برچسب فارسی.
+# گام بی‌اسکریپت یعنی else -> "false" ⇒ تا timeout تلاش و بعد شکست.
+_script13=_wt[_wt.find('private fun scriptFor'):]
+_script13=_script13[:_script13.find('\n    }\n')+6]
+_label13=_wt[_wt.find('private fun labelFor'):]
+_label13=_label13[:_label13.find('\n    }\n')+6]
+# confirm و wait_ms و goto عمداً بیرون از scriptFor هستند: هیچ‌کدام با
+# evaluateJavascript انجام نمی‌شوند و در runStep مدیریت می‌شوند. اما این
+# استثنا باید «سنجیده» شود، وگرنه یک گامِ فراموش‌شده بی‌صدا تا timeout
+# شکست می‌خورد — دقیقاً همان باگی که برای goto داشتیم.
+_rs13=_wt[_wt.find('private fun runStep'):_wt.find('private fun attempt')]
+_handled13={'confirm','wait_ms','goto'}
+_nohandled=[t for t in sorted(_handled13) if 'step.type == "%s"'%t not in _rs13]
+check('بخش۱۳ گام‌های بی‌اسکریپت در runStep مدیریت می‌شوند', not _nohandled, _nohandled)
+# حلقهٔ بی‌پایان: onPageFinished خودش runStep را صدا می‌زند، پس goto باید
+# index را «پیش از» loadUrl جلو ببرد.
+# بلوک کامل goto، نه تا اولین return: اولین return داخل گارد «نشانی خالی»
+# است و «پیش از» loadUrl می‌آید، پس برش روی آن، loadUrl را از پنجره بیرون
+# می‌انداخت و سنجش (22, -1) می‌داد. کرانهٔ درست، فراخوانی attempt است که
+# بعد از بلوک goto می‌آید.
+_gotoseg=_rs13[_rs13.find('"goto"'):]
+_end13=_gotoseg.find('attempt(wv, step')
+_gotoseg=_gotoseg[:_end13] if _end13 > 0 else _gotoseg
+check('بخش۱۳ پنجرهٔ بلوک goto تهی استخراج نشد (سنجش تهی نیست)',
+      'loadUrl' in _gotoseg and 'index += 1' in _gotoseg, len(_gotoseg))
+check('بخش۱۳ goto پیش از loadUrl جلو می‌رود (حلقهٔ بی‌پایان نمی‌سازد)',
+      0 <= _gotoseg.find('index += 1') < _gotoseg.find('loadUrl'),
+      (_gotoseg.find('index += 1'), _gotoseg.find('loadUrl')))
+check('بخش۱۳ goto با نشانی خالی شکست صریح می‌دهد نه loadUrl("")',
+      'target.isBlank()' in _gotoseg, '')
+_noscript=[t for t in sorted(WEB_STEP_TYPES-_handled13) if '"%s"'%t not in _script13]
+check('بخش۱۳ هر گام وب اسکریپت دارد', not _noscript, _noscript)
+_nolabel=[t for t in sorted(WEB_STEP_TYPES) if '"%s"'%t not in _label13]
+check('بخش۱۳ هر گام وب برچسب فارسی overlay دارد', not _nolabel, _nolabel)
+
+# ۱۳٫۳) تزریق: سلکتور و مقدار از رسپی می‌آیند. یک ' ساده باید اسکریپت را
+# بشکند؛ JSONObject.quote هر دو را یک‌جا می‌بندد.
+check('بخش۱۳ سلکتور/مقدار با JSONObject.quote نقل‌قول می‌شوند',
+      'JSONObject.quote' in _wt and _script13.count('${q(')>=3, _script13.count('${q('))
+
+# ۱۳٫۴) دام React: انتساب مستقیم e.value فرم را به‌روز نمی‌کند. باید setter
+# بومی prototype صدا زده شود و رویداد input با bubbles:true برود.
+check('بخش۱۳ setter بومی prototype برای ورودی React استفاده می‌شود',
+      'getOwnPropertyDescriptor(proto' in _wt and 'd.set.call(e,v)' in _wt, '')
+check('بخش۱۳ رویداد input با bubbles فرستاده می‌شود',
+      "dispatchEvent(new Event('input',{bubbles:true}))" in _wt, '')
+
+# ۱۳٫۵) دروازهٔ صداقت: بدون نگاشت سلکتور، اصلاً اجرا نمی‌شود.
+check('بخش۱۳ بدون selectors_verified اجرا نمی‌کند',
+      'if (!parsed.selectorsVerified)' in _wt and '"not_mapped"' in _wt, '')
+check('بخش۱۳ گام probe برای نگاشت سلکتور روی دستگاه هست',
+      '"probe"' in _wt and 'SEPANDYAR_PROBE' in _wt, '')
+
+# ۱۳٫۶) تأیید صریح در مسیر وب هم الزامی است (همان قاعدهٔ بخش۱۲).
+check('بخش۱۳ مسیر وب هم از کارت تأیید استفاده می‌کند',
+      'OverlayController.showConfirm' in _wt, '')
+check('بخش۱۳ لغو، اجرای در جریان را متوقف می‌کند',
+      'fun cancel()' in _wt and 'cancelled = true' in _wt, '')
+check('بخش۱۳ پس از پایان، سالمند روی صفحهٔ سرویس رها نمی‌شود',
+      'HOME_URL' in _wt and 'loadUrl(HOME_URL)' in _wt, '')
+check('بخش۱۳ هلپر DOM پس از هر ناوبری دوباره تزریق می‌شود',
+      'onPageFinished' in _wt and 'evaluateJavascript(HELPERS' in _wt, '')
+
+# ۱۳٫۷) متدهای پل باید گارد مبدأ داشته باشند: addJavascriptInterface با هر
+# ناوبری باقی می‌ماند و صفحهٔ اسنپ هم می‌تواند SepandyarNative را صدا بزند.
+for _m13 in ('runWebTask','cancelWebTask'):
+    _i13=_ma.find('@JavascriptInterface fun %s'%_m13)
+    _seg13=_ma[_i13:_i13+240] if _i13>=0 else ''
+    check('بخش۱۳ %s گارد bridgeTrusted دارد'%_m13, 'bridgeTrusted' in _seg13, _seg13[:90])
+check('بخش۱۳ runWebTask بدون WebView مقداردهی‌نشده اجرا نمی‌شود',
+      '::web.isInitialized' in _ma[_ma.find('fun runWebTask'):_ma.find('fun runWebTask')+300], '')
+
+# ۱۳٫۸) رابط وب: مسیریابی، لغو، و پیام «آماده نیست»
+check('بخش۱۳ رابط بر اساس mode رسپی مسیر را انتخاب می‌کند',
+      "_mode==='web'" in web and 'runWebTask' in web, '')
+check('بخش۱۳ دکمهٔ لغو به cancelWebTask می‌رود وقتی کار وب است',
+      'cancelWebTask' in web and 'screenRunState.web' in web, '')
+check('بخش۱۳ وضعیت not_mapped پیام riêng دارد (نه «شکست» مبهم)',
+      "res.status==='not_mapped'" in web, '')
+check('بخش۱۳ resپی وب url و selectors_verified را به موتور می‌فرستد',
+      'plan.url=' in web and 'plan.selectors_verified=' in web, '')
+check('بخش۱۳ دارایی اندروید با رابط وب همگام است',
+      open(os.path.join(AND,'app/src/main/assets/index.html'),encoding='utf-8').read()==web, '')
 
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)

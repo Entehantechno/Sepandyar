@@ -331,7 +331,7 @@ async function openScreenControl(){const r=await apiRequest('/api/apps/approved'
 function grantOverlay(){if(window.SepandyarNative&&window.SepandyarNative.openOverlaySettings)window.SepandyarNative.openOverlaySettings()}
 function showScreenOverlay(title,detail,done,total){let el=document.getElementById('screen-overlay');if(!el){el=document.createElement('div');el.id='screen-overlay';el.style.cssText='position:fixed;top:16px;right:16px;z-index:9999;background:#214e4a;color:#fff;border-radius:18px;padding:12px 14px;width:212px;box-shadow:0 12px 30px #0004;font-size:1rem';document.body.appendChild(el)}const pct=total?Math.round((done||0)*100/total):0;el.innerHTML='<div style="display:flex;align-items:center;gap:6px"><b id="so-title" style="flex:1">'+title+'</b><button onclick="cancelScreenRun()" style="background:#ffffff2e;color:#fff;border:0;border-radius:10px;padding:4px 8px;font-size:1rem">لغو</button></div><div id="so-detail" style="color:#c4e5da;margin:5px 0 7px">'+(detail||'')+'</div><div style="height:5px;background:#ffffff26;border-radius:4px"><i style="display:block;height:5px;background:#54bfa0;border-radius:4px;width:'+pct+'%"></i></div>'}
 function hideScreenOverlay(){const el=document.getElementById('screen-overlay');if(el)el.remove()}
-function cancelScreenRun(){if(window.SepandyarNative&&window.SepandyarNative.cancelScreenTask){window.SepandyarNative.cancelScreenTask();return}if(screenRunState)screenRunState.cancelled=true}
+function cancelScreenRun(){var _w=!!(screenRunState&&screenRunState.web);var _c=window.SepandyarNative&&(_w?window.SepandyarNative.cancelWebTask:window.SepandyarNative.cancelScreenTask);if(_c){_c();return}if(screenRunState)screenRunState.cancelled=true}
 function stepLabel(t){return{launch:'باز کردن اپ',tap_text:'لمس کردن',input_text:'وارد کردن متن',tap_xy:'لمس نقطه',scroll:'پیمایش صفحه',back:'بازگشت',home:'صفحه اصلی',wait:'کمی صبر کنید'}[t]||'در حال اجرا'}
 function reportScreenRun(plan,status,done,error){apiRequest('/api/screen-tasks',{method:'POST',body:JSON.stringify({package:plan.package,title:plan.title,status:status,steps_total:(plan.steps||[]).length,steps_done:done,error:error||''})})}
 /*
@@ -383,9 +383,21 @@ const _raw=JSON.stringify((app.plan||{}).steps||[]);
 const _need=[];(_raw.match(/\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}/g)||[]).forEach(function(m){var k=m.replace(/[{}\s]/g,'');if(_need.indexOf(k)<0)_need.push(k)});
 const params={};
 for(const k of _need){const v=await askForParam(k);if(!v){speakBack('بدون این نمی‌توانم ادامه بدهم. هر وقت خواستید دوباره امتحان کنیم.');return}params[k]=v}
-const plan={id:String(Date.now()),title:app.label,package:app.package,steps:(app.plan||{}).steps||[],params:params,return_to_app:true};screenRunState={plan:plan,done:0,cancelled:false,native:!!(window.SepandyarNative&&window.SepandyarNative.runScreenTask)};if(screenRunState.native){showScreenOverlay('در حال باز کردن '+app.label,'سپندیار کنترل را به دست گرفت',0,plan.steps.length);const started=window.SepandyarNative.runScreenTask(JSON.stringify(plan));if(!started){hideScreenOverlay();speakBack('اجرای کار ممکن نشد؛ شاید کار دیگری در جریان است.');return}closeModal();speakBack('دارم '+app.label+' را باز می‌کنم. کارت کوچک روی صفحه را می‌بینید و هر وقت خواستید لغو کنید.');return}closeModal();simulateScreenRun(plan,app)}
+/*
+  دو مسیر اجرا؛ انتخاب با «mode» رسپی است نه با فهرست دستی اپ‌ها.
+  مسیر وب از AccessibilityService استفاده نمی‌کند، پس مشمول سیاست
+  دسترس‌پذیری Play (اجرایی ۲۸ ژانویهٔ ۲۰۲۶) و محدودیت Android 17
+  Advanced Protection نیست.
+*/
+const _mode=((app.plan||{}).mode)||'native';
+const plan={id:String(Date.now()),title:app.label,package:app.package,steps:(app.plan||{}).steps||[],params:params,return_to_app:true};
+if(_mode==='web'){plan.url=(app.plan||{}).url||'';plan.selectors_verified=!!(app.plan||{}).selectors_verified}
+const _web=_mode==='web';
+const _bridge=window.SepandyarNative&&(_web?window.SepandyarNative.runWebTask:window.SepandyarNative.runScreenTask);
+screenRunState={plan:plan,done:0,cancelled:false,web:_web,native:!!_bridge};
+if(screenRunState.native){showScreenOverlay('در حال باز کردن '+app.label,'سپندیار کنترل را به دست گرفت',0,plan.steps.length);const started=_bridge(JSON.stringify(plan));if(!started){hideScreenOverlay();speakBack(_web?'این سرویس هنوز روی این دستگاه آماده نشده است.':'اجرای کار ممکن نشد؛ شاید کار دیگری در جریان است.');return}closeModal();speakBack('دارم '+app.label+' را باز می‌کنم. کارت کوچک روی صفحه را می‌بینید و هر وقت خواستید لغو کنید.');return}closeModal();simulateScreenRun(plan,app)}
 function simulateScreenRun(plan,app){let i=0;const total=(plan.steps||[]).length;showScreenOverlay('در حال باز کردن '+app.label,'اجرای نمایشی در مرورگر',0,total);speakBack('دارم '+app.label+' را باز می‌کنم.');const tick=()=>{if(!screenRunState||screenRunState.cancelled){hideScreenOverlay();screenRunState=null;speakBack('کار لغو شد.');return}if(i>=total){hideScreenOverlay();screenRunState=null;speakBack('کار «'+app.label+'» انجام شد و به سپندیار برگشتیم.');reportScreenRun(plan,'done',total,'');return}const st=plan.steps[i];showScreenOverlay(stepLabel(st.type),st.payload||'',i,total);i++;if(screenRunState)screenRunState.done=i;setTimeout(tick,1400)};setTimeout(tick,1200)}
-window.onScreenTaskResult=function(res){hideScreenOverlay();const plan=(screenRunState&&screenRunState.plan)||{package:res.package,title:res.title,steps:[]};screenRunState=null;if(res.status==='done'){speakBack('کار «'+res.title+'» انجام شد و به سپندیار برگشتیم.')}else if(res.status==='cancelled'){speakBack('کار لغو شد و به سپندیار برگشتیم.')}else{speakBack('کار ناتمام ماند. '+(res.error||''))}reportScreenRun(plan,res.status,res.steps_done||0,res.error||'')};
+window.onScreenTaskResult=function(res){hideScreenOverlay();if(res.status==='not_mapped'){screenRunState=null;speakBack('این سرویس هنوز روی این دستگاه آماده نشده است.');return}const plan=(screenRunState&&screenRunState.plan)||{package:res.package,title:res.title,steps:[]};screenRunState=null;if(res.status==='done'){speakBack('کار «'+res.title+'» انجام شد و به سپندیار برگشتیم.')}else if(res.status==='cancelled'){speakBack('کار لغو شد و به سپندیار برگشتیم.')}else{speakBack('کار ناتمام ماند. '+(res.error||''))}reportScreenRun(plan,res.status,res.steps_done||0,res.error||'')};
 /* ---- موتور صبر گفتاری ----
  پژوهش: دقت ASR با سن افت معنادار ندارد (WER ۶٫۲۴٪ در برابر ۶٫۰۱٪، بازه شامل صفر) اما نوبت‌گیری
  ۵٫۴ برابر بدتر می‌شود؛ در آستانه ۷۰۰ms، ۲۲٪ جمله‌های دهه‌ی هشتاد زندگی مکث درون‌جمله‌ای دارند

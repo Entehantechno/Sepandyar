@@ -156,10 +156,29 @@ def _bootstrap(c):
          'تاکسی',
          '🚕',
          [{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'کجا می‌روید','timeout_ms':9000},{'type':'input_text','payload':'{{destination}}','timeout_ms':6000},{'type':'ime_enter','payload':'','timeout_ms':5000},{'type':'confirm','payload':'مقصد و مبلغ را روی صفحه می‌بینید. این سفر را تأیید می‌کنید؟','timeout_ms':60000},{'type':'tap_text','payload':'درخواست خودرو','timeout_ms':16000}],0),
+       # مسیر وب: نسخهٔ وب سرویس‌ها داخل WebView خودمان.
+       # **selectors_verified عمداً False است.** سلکتورهای CSS باید روی
+       # دستگاه واقعی با گام probe نگاشت شوند؛ من DOM این سایت‌ها را
+       # ندیده‌ام و هر سلکتوری که حدس بزنم بی‌صدا شکست می‌خورد. موتور در
+       # این حالت اصلاً اجرا نمی‌کند و نتیجهٔ صریح not_mapped می‌دهد.
+       # شناسه با پیشوند web. است چون این‌ها بستهٔ قابل launch نیستند.
+       ('web.snapp.passenger','اسنپ (نسخهٔ وب)','تاکسی','🌐',
+         [{'type':'goto','payload':'https://app.snapp.ir/','timeout_ms':12000},{'type':'wait_css','payload':'','timeout_ms':15000},{'type':'set_css','payload':'','value':'{{destination}}','timeout_ms':8000},{'type':'confirm','payload':'مقصد و مبلغ را می‌بینید. این سفر را تأیید می‌کنید؟','timeout_ms':60000}],
+         0,{'mode':'web','url':'https://app.snapp.ir/','selectors_verified':False}),
+       ('web.snapp.food','اسنپ‌فود (نسخهٔ وب)','خرید','🌐',
+         [{'type':'goto','payload':'https://food.snapp.ir/','timeout_ms':12000},{'type':'wait_css','payload':'','timeout_ms':15000},{'type':'set_css','payload':'','value':'{{item}}','timeout_ms':8000},{'type':'confirm','payload':'این کالا را پیدا کردم. تأیید می‌کنید؟','timeout_ms':60000}],
+         0,{'mode':'web','url':'https://food.snapp.ir/','selectors_verified':False}),
        ('com.android.chrome','کروم','مرورگر','🌐',[{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'جست‌وجو یا وارد کردن نشانی','timeout_ms':9000},{'type':'input_text','payload':'نوبت پزشک','timeout_ms':6000},{'type':'ime_enter','payload':'','timeout_ms':5000,'expect':'نوبت پزشک'}],1),
        ('ir.mci.ecareapp','همراه من','قبض و شارژ','📱',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'شارژ و بسته','timeout_ms':9000},{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'خرید شارژ','timeout_ms':9000},{'type':'wait','timeout_ms':2500}],0),
        ('com.sibche.aspardproject.app','آپ','پرداخت قبض','💳',[{'type':'wait','timeout_ms':3000},{'type':'tap_text','payload':'پرداخت قبض','timeout_ms':9000},{'type':'wait','timeout_ms':2500},{'type':'tap_text','payload':'قبض موبایل','timeout_ms':9000},{'type':'wait','timeout_ms':2500}],0)]
- for pkg,label,cat,icon,steps,verified in apps: c.execute('INSERT OR IGNORE INTO approved_apps VALUES(?,?,?,?,?,?,?)',(pkg,label,cat,icon,json.dumps({'steps':steps,'verified':verified},ensure_ascii=False),1,now()))
+ # عنصر هفتم اختیاری است: کلیدهای اضافهٔ plan (mode/url/selectors_verified).
+ # بدون آن، رسپی‌های وب هیچ راهی برای گفتن «من وب هستم» نداشتند و
+ # افزودن ستون به جدول، مهاجرت schema می‌خواست.
+ for row in apps:
+  pkg,label,cat,icon,steps,verified = row[:6]
+  plan = {'steps':steps,'verified':verified}
+  if len(row) > 6: plan.update(row[6])
+  c.execute('INSERT OR IGNORE INTO approved_apps VALUES(?,?,?,?,?,?,?)',(pkg,label,cat,icon,json.dumps(plan,ensure_ascii=False),1,now()))
  lex=[('meds','داروهای من','meds',['دارو','قرص','داروها','داروی من','داروهایم'],'medicine pills blister pack on table',90),
       ('vitals','فشار خون و قند','vitals',['فشار','قند','فشار خون','قند خون','علائم حیاتی','وزن'],'home blood pressure monitor device',85),
       ('symptom','اعلام علامت و ناراحتی','symptom',['علامت','درد','سرگیجه','حالم بد','خوب نیستم','تهوع','تنگی نفس','ناراحت'],'elderly patient talking with nurse at home',80),

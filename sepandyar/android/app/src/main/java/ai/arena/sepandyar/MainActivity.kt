@@ -232,6 +232,20 @@ class MainActivity : Activity() {
         }
         @JavascriptInterface fun cancelScreenTask() { if (!bridgeTrusted) return; ScreenTaskRunner.cancel() }
 
+        // ---- مسیر وب: نسخهٔ وب سرویس‌ها داخل WebView خودمان ----
+        // این مسیر عمداً از AccessibilityService استفاده نمی‌کند، پس مشمول
+        // سیاست دسترس‌پذیری Play (اجرایی ۲۸ ژانویهٔ ۲۰۲۶) و محدودیت
+        // Advanced Protection اندروید ۱۷ نیست. نتیجه با همان
+        // reportTaskResult و همان onScreenTaskResult برمی‌گردد تا رابط
+        // یک‌دست بماند و جاوااسکریپت دو مسیر را تفکیک نکند.
+        @JavascriptInterface fun runWebTask(planJson: String): Boolean {
+            if (!bridgeTrusted) return false
+            if (!::web.isInitialized) return false
+            WebTaskRunner.onResult = { r -> reportTaskResult(r) }
+            return WebTaskRunner.start(web, planJson)
+        }
+        @JavascriptInterface fun cancelWebTask() { if (!bridgeTrusted) return; WebTaskRunner.cancel() }
+
         // ---- مرحلهٔ ۲۳: خواندن صفحه و اعلان‌ها ----
         // همهٔ این‌ها گارد مبدأ را در زمان فراخوانی می‌سنجند؛ addJavascriptInterface
         // با هر ناوبری باقی می‌ماند و shouldOverrideUrlLoading به‌تنهایی کافی نیست.
