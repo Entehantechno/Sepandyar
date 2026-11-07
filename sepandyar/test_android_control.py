@@ -1216,6 +1216,170 @@ check('بخش۱۶ پاسخِ غیر 2xx رشتهٔ خالی می‌دهد نه �
 check('بخش۱۶ مسیر بینایی API دسترس‌پذیری تازه‌ای ندارد',
       not any(k in _rvv16 for k in ('AccessibilityNodeInfo', 'dispatchGesture', 'performGlobalAction')), '')
 
+
+# ════════════════════════════════════════════════════════════════════════
+# بخش ۱۷ — ضربهٔ بینایی: بستنِ حلقهٔ «دیدن → عمل کردن»
+#
+# پیش از این، fallback بینایی فقط «متن» می‌داد. یعنی می‌توانستیم به سالمند
+# بگوییم روی صفحه چیست، ولی در همان اپ‌هایی که بیشترین نیاز را دارند
+# (فلاتر، canvas، WebView) نمی‌توانستیم هیچ دکمه‌ای را بزنیم. کنترل صفحه
+# ناقص بود.
+#
+# الگو از بررسی منابع: crew-helper#114 (VisualTapLease + فهرست ممنوعهٔ
+# کنش‌های تعهدآور) و UGround/OS-Atlas (مکان‌یابی بصری به مختصات).
+# ════════════════════════════════════════════════════════════════════════
+_hnd17 = open(os.path.join(ROOT, 'app', 'handler.py'), encoding='utf-8').read()
+_mem17 = open(os.path.join(ROOT, 'app', 'memory.py'), encoding='utf-8').read()
+_rn17 = open(os.path.join(KT, 'ScreenTaskRunner.kt'), encoding='utf-8').read()
+_sc17 = open(os.path.join(KT, 'ScreenControlService.kt'), encoding='utf-8').read()
+_rn17c = strip_kotlin(_rn17)
+_sc17c = strip_kotlin(_sc17)
+
+# ── ۱۷٫۱) endpoint وجود دارد و دروازه‌هایش به ترتیب درست‌اند ──────────
+_ep17 = _hnd17[_hnd17.find("p=='/api/screen/vision/tap'"):]
+check('بخش۱۷ endpoint /api/screen/vision/tap وجود دارد', _ep17.startswith("p=='"), '')
+_ep17 = _ep17[:_ep17.find("if p=='/api/screen-tasks'")] if "if p=='/api/screen-tasks'" in _ep17 else _ep17[:3000]
+_o17 = [k for k in ("consent_granted(c,'screen_vision')", 'image_required', 'target_required',
+                    'vision_tap_denied', 'image_too_large', 'rate_limited', 'call_llm_vision_ground')
+        if k in _ep17]
+check('بخش۱۷ هر هفت دروازه در مسیر هست', len(_o17) == 7, _o17)
+_i17 = {k: _ep17.find(k) for k in _o17}
+check('بخش۱۷ رضایت «پیش از» هر چیز دیگری سنجیده می‌شود',
+      _i17["consent_granted(c,'screen_vision')"] == min(_i17.values()), _i17)
+check('بخش۱۷ فهرست ممنوعه «پیش از» محدودیت نرخ است (درخواستِ ردشده بودجه نمی‌سوزاند)',
+      _i17['vision_tap_denied'] < _i17['rate_limited'], (_i17['vision_tap_denied'], _i17['rate_limited']))
+check('بخش۱۷ هیچ تصویری در رویداد ثبت نمی‌شود',
+      "'screen_vision_tap'" in _ep17 and 'img' not in _ep17.split("'screen_vision_tap'")[1].split(')')[0], '')
+
+# ── ۱۷٫۲) زنده: ترتیب دروازه‌ها در عمل ──────────────────────────────
+req('/api/consents', 'POST', {'scope': 'screen_vision', 'granted': False, 'confirmed_by_voice': False})
+_st17, _bd17 = req('/api/screen/vision/tap', 'POST', {'image': 'x' * 50, 'target': 'منو'})
+check('بخش۱۷ زنده: بی‌رضایت ۴۰۳', _st17 == 403 and _bd17.get('error') == 'senior_consent_not_granted', (_st17, _bd17))
+req('/api/consents', 'POST', {'scope': 'screen_vision', 'granted': True, 'confirmed_by_voice': True})
+_st17, _bd17 = req('/api/screen/vision/tap', 'POST', {'target': 'منو'})
+check('بخش۱۷ زنده: بی‌تصویر ۴۰۰', _st17 == 400 and _bd17.get('error') == 'image_required', (_st17, _bd17))
+_st17, _bd17 = req('/api/screen/vision/tap', 'POST', {'image': 'x' * 50})
+check('بخش۱۷ زنده: بی‌هدف ۴۰۰', _st17 == 400 and _bd17.get('error') == 'target_required', (_st17, _bd17))
+for _t17 in ('پرداخت', 'ثبت سفارش', 'Pay Now', 'CHECKOUT', 'ورود به حساب', 'حذف', 'password'):
+    _st17, _bd17 = req('/api/screen/vision/tap', 'POST', {'image': 'x' * 50, 'target': _t17})
+    check('بخش۱۷ زنده: «%s» با بینایی رد می‌شود' % _t17,
+          _st17 == 403 and _bd17.get('error') == 'visual_tap_denied', (_st17, _bd17))
+# تصویرِ بیش‌ازحد بزرگ عمداً انتخاب شد، نه تصویرِ کوچک.
+#
+# چرا؟ کران اندازه «پیش از» محدودیت نرخ سنجیده می‌شود. پس ۴۱۳ ثابت می‌کند
+# درخواست از دروازهٔ رضایت، تصویر، هدف و «فهرست ممنوعه» گذشته — بدون آنکه
+# حتی یک توکن از بودجهٔ نرخ را بسوزاند. نسخهٔ نخست اینجا تصویر کوچک
+# می‌فرستاد و ۵۰۲ می‌گرفت؛ یعنی دو توکن مصرف می‌کرد و §۲۷ در
+# test_deployment («دقیقاً ۶ درخواست در پنجره») را می‌شکست. بودجهٔ نرخ
+# stateِ داخل «فرایند سرور» است و از فرایند آزمون قابل بازنشانی نیست.
+_BIG17 = 'x' * 400_001
+_st17, _bd17 = req('/api/screen/vision/tap', 'POST', {'image': _BIG17, 'target': 'دسته‌بندی غذا'})
+check('بخش۱۷ زنده: هدفِ ناوبری از فهرست ممنوعه می‌گذرد (۴۱۳ نه ۴۰۳)',
+      _st17 == 413 and _bd17.get('error') == 'image_too_large', (_st17, _bd17))
+
+# ── ۱۷٫۳) زنده: درخواستِ ردشده بودجهٔ نرخ را نمی‌سوزاند ──────────────
+# هفت بار هدفِ ممنوع می‌فرستیم؛ اگر دروازهٔ رد «بعد از» محدودیت نرخ بود،
+# بودجه تمام می‌شد و درخواست مشروع بعدی ۴۲۹ می‌گرفت.
+for _ in range(7):
+    _s, _ = req('/api/screen/vision/tap', 'POST', {'image': 'x' * 50, 'target': 'پرداخت'})
+    check('بخش۱۷ زنده: درخواستِ ردشده هرگز ۴۲۹ نمی‌شود', _s == 403, _s)
+_st17, _bd17 = req('/api/screen/vision/tap', 'POST', {'image': _BIG17, 'target': 'دسته‌بندی غذا'})
+check('بخش۱۷ زنده: پس از ۸ درخواستِ ردشده، هدفِ مشروع هنوز به کران نرخ نرسیده',
+      _st17 == 413 and _st17 != 429, (_st17, _bd17))
+
+# ── ۱۷٫۳٫۱) پاک‌سازی: رضایت را همان‌طور که بود برگردان ──────────────
+# بدون این، §۲۷ در test_deployment («بی‌رضایت باید ۴۰۳ بدهد») روی رضایتِ
+# روشنِ باقی‌مانده از این بخش اجرا می‌شد و ۵۰۲ می‌گرفت. آلودگیِ state بین
+# دو سوئیت — و چون هر دو سبز/قرمز بودنشان به ترتیب اجرا بند بود، فقط در
+# اجرای «کامل» هارنس دیده می‌شد، نه در اجرای تکی.
+req('/api/consents', 'POST', {'scope': 'screen_vision', 'granted': False, 'confirmed_by_voice': False})
+
+# ── ۱۷٫۴) parse_ground: تنها جایی که رشتهٔ مدل به عدد تبدیل می‌شود ──
+sys.path.insert(0, ROOT)
+from app.memory import parse_ground as _pg17
+_cases17 = [
+    ('{"found": true, "x": 0.52, "y": 0.83}', {'found': True, 'x': 0.52, 'y': 0.83}),
+    ('```json\n{"found": true, "x": 0.5, "y": 0.5}\n```', {'found': True, 'x': 0.5, 'y': 0.5}),
+    ('بفرما: {"found": true, "x": 0.1, "y": 0.9} موفق باشی', {'found': True, 'x': 0.1, 'y': 0.9}),
+    ('{"found": false}', None),
+    ('{"found": true, "x": 540, "y": 1200}', None),   # پیکسل داده، نه نرمال
+    ('{"found": true, "x": -0.1, "y": 0.5}', None),
+    ('{"found": true, "x": 1.2, "y": 0.5}', None),
+    ('{"found": true, "y": 0.5}', None),
+    ('{"found": true, "x": "abc", "y": 0.5}', None),
+    ('{"found": "true", "x": 0.1, "y": 0.9}', None),
+    ('پیدا نکردم', None), ('', None), (None, None), (42, None),
+]
+_bad17 = [(r, _pg17(r), e) for r, e in _cases17 if _pg17(r) != e]
+check('بخش۱۷ parse_ground هر ۱۴ حالت را درست تجزیه می‌کند', not _bad17, _bad17)
+check('بخش۱۷ سنجش تهی نیست: دست‌کم ۳ حالت باید قبول شود',
+      sum(1 for _, e in _cases17 if e is not None) >= 3, '')
+
+# ── ۱۷٫۵) هم‌خوانی دو فهرستِ ممنوعه (بار اصلیِ این بخش) ──────────────
+# اگر فهرست دستگاه و فهرست سرور جدا بیفتند، یکی چیزی را مجاز می‌داند که
+# آن یکی رد می‌کند — و چون هر دو لایه «ایمنی»‌اند، رانش بی‌صدا است و build
+# هم سبز می‌ماند. همان شکلِ دامی که در §۱۵ (annotation↔manifest) بود.
+_m17s = re.search(r'VISION_TAP_DENY\s*=\s*\(([^)]*)\)', _hnd17, re.S)
+_m17k = re.search(r'COMMIT_LABELS\s*=\s*setOf\(([^)]*)\)', _rn17, re.S)
+check('بخش۱۷ هر دو فهرست استخراج شدند (سنجش تهی نیست)',
+      _m17s is not None and _m17k is not None, (_m17s is not None, _m17k is not None))
+_srv17 = set(re.findall(r"'([^']+)'", _m17s.group(1))) if _m17s else set()
+_cli17 = set(re.findall(r'"([^"]+)"', _m17k.group(1))) if _m17k else set()
+check('بخش۱۷ فهرست سرور تهی نیست', len(_srv17) >= 20, len(_srv17))
+check('بخش۱۷ فهرست دستگاه تهی نیست', len(_cli17) >= 20, len(_cli17))
+check('بخش۱۷ دو فهرست «یکسان»‌اند (رانش = ضربهٔ بینایی به کنش تعهدآور)',
+      _srv17 == _cli17, sorted(_srv17 ^ _cli17))
+
+# ── ۱۷٫۶) ضربهٔ بینایی فقط برای ناوبری، و فقط با سه قید ──────────────
+_un17 = _body16('unreadableScreen', _rn17c)
+# از منبع «خام»: strip_kotlin رشته‌ها را پاک می‌کند، پس «tap_text» در
+# _rn17c وجود ندارد و سنجش همیشه شکست می‌خورد (همان دامِ §۱۶).
+check('بخش۱۷ ضربهٔ بینایی فقط برای tap_text است',
+      'step.type == "tap_text"' in _rn17, '')
+_tvt17 = _body16('tryVisualTap', _rn17c)
+check('بخش۱۷ بدنهٔ tryVisualTap تهی استخراج نشد (سنجش تهی نیست)',
+      len(_tvt17) > 300, len(_tvt17))
+check('بخش۱۷ ضربهٔ بینایی روی نخ پس‌زمینه است',
+      'worker.execute' in _tvt17 and _tvt17.find('worker.execute') < _tvt17.find('locateViaVision'), '')
+_f1 = _tvt17.find('screenFingerprint'); _l1 = _tvt17.find('locateViaVision')
+_f2 = _tvt17.rfind('screenFingerprint')
+check('بخش۱۷ اثرانگشت «پیش از» مکان‌یابی گرفته می‌شود', 0 <= _f1 < _l1, (_f1, _l1))
+check('بخش۱۷ اثرانگشت «پس از» مکان‌یابی هم گرفته می‌شود (اجاره)',
+      _f2 > _l1 and _tvt17.count('screenFingerprint') >= 2, _tvt17.count('screenFingerprint'))
+check('بخش۱۷ ضربه «فقط» پس از یکسان بودن دو اثرانگشت است',
+      'before != after' in _tvt17 and _tvt17.find('before != after') < _tvt17.find('visualTap'), '')
+check('بخش۱۷ دروازهٔ برچسب تعهدآور پیش از ورود به مسیر ضربه است',
+      'commitLabel(step.payload) == null' in _rn17c, '')
+check('بخش۱۷ اثرِ ضربه راستی‌آزمایی می‌شود (گام دوباره سنجیده می‌شود، نه فرضِ موفقیت)',
+      'attempt(step, svc, deadline, tries + 1)' in _tvt17, '')
+check('بخش۱۷ tries+1 از حلقهٔ بی‌پایان جلوگیری می‌کند',
+      'tries + 1' in _tvt17 and 'tries)' not in _tvt17.replace('tries + 1', ''), '')
+check('بخش۱۷ بازگشت از worker لغو را می‌سنجد', 'if (cancelled || !running) return@post' in _tvt17, '')
+# باز هم منبع خام: خودِ «""» یک رشته است و strip_kotlin حذفش می‌کند.
+_cl17 = _body16('commitLabel', _rn17)
+check('بخش۱۷ بدنهٔ commitLabel تهی استخراج نشد (سنجش تهی نیست)',
+      len(_cl17) > 100 and 'COMMIT_LABELS' in _cl17, len(_cl17))
+check('بخش۱۷ برچسب «خالی» تعهدآور شمرده می‌شود (ضربهٔ بی‌هدف ممنوع)',
+      'if (t.isEmpty()) return ""' in _cl17, _cl17[:150])
+
+# ── ۱۷٫۷) مختصات نرمال‌شده، نه پیکسل ─────────────────────────────────
+_vt17 = _body16('visualTap', _sc17c)
+check('بخش۱۷ visualTap بازهٔ ۰ تا ۱ را اعتبارسنجی می‌کند',
+      'nx < 0f || nx > 1f || ny < 0f || ny > 1f' in _vt17, '')
+check('بخش۱۷ ضربه با displayMetrics به پیکسلِ «صفحه» تبدیل می‌شود نه پیکسلِ تصویر',
+      'displayMetrics' in _vt17 and 'widthPixels' in _vt17 and 'heightPixels' in _vt17, '')
+_lv17 = _body16('locateViaVision', _sc17c)
+check('بخش۱۷ locateViaVision هم بازه را سمت دستگاه چک می‌کند (دفاع دوم)',
+      'x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0' in _lv17, '')
+check('بخش۱۷ locateViaVision از captureForVision می‌گذرد (رضایت دور زده نمی‌شود)',
+      'captureForVision()' in _lv17 and 'takeScreenshot' not in _lv17, '')
+check('بخش۱۷ locateViaVision timeout شبکه دارد',
+      'connectTimeout' in _lv17 and 'readTimeout' in _lv17, '')
+check('بخش۱۷ effect انگشت صفحه تهی استخراج نشد (سنجش تهی نیست)',
+      len(_body16('screenFingerprint', _sc17c)) > 120, len(_body16('screenFingerprint', _sc17c)))
+check('بخش۱۷ هیچ API دسترس‌پذیری تازه‌ای در مسیر بینایی نیست',
+      not any(k in _lv17 for k in ('AccessibilityNodeInfo', 'performGlobalAction')), '')
+
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)
 print('Stage-3 Android control test passed')

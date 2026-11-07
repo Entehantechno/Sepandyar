@@ -75,6 +75,32 @@ object ScreenTaskRunner {
     /** شمارشگر خواندن‌های بیناییِ کارِ جاری. در start() صفر می‌شود. */
     private var visionReads = 0
 
+    /**
+     * برچسب‌هایی که ضربهٔ بینایی برایشان **هرگز** مجاز نیست.
+     *
+     * چرا؟ چون ضربهٔ بینایی «حدسِ مختصات» است. اگر مدل جای «پرداخت» را یک
+     * سانتی‌متر جابه‌جا بدهد، پول سالمند رفته است و برگشتی نیست. الگو از
+     * crew-helper#114: «SEND, payment, purchase, deletion, account, credential
+     * and other high-risk/commit targets can never use visual coordinates».
+     *
+     * عمداً پهن است. ضربهٔ بینایی برای «ناوبری» است — پیدا کردن یک دسته،
+     * یک تب، یک گزینه در فهرست — نه برای تعهد. اشتباهِ مثبت هزینه‌اش یک
+     * گامِ ناموفق است؛ اشتباهِ منفی هزینه‌اش یک تراکنش بانکی.
+     *
+     * سرور هم همین فهرست را دارد و رد می‌کند. دو لایه، هر دو لازم: این یکی
+     * از درخواستِ بی‌مصرف جلوگیری می‌کند، آن یکی جلوی دور زدن را می‌گیرد.
+     */
+    private val COMMIT_LABELS = setOf(
+        "پرداخت", "ثبت سفارش", "ثبت و پرداخت", "تأیید نهایی", "تایید نهایی",
+        "ارسال سفارش", "خرید", "واریز", "انتقال وجه", "برداشت", "تأیید", "تایید",
+        "حذف", "ورود", "ثبت نام", "ثبت‌نام", "رمز", "گذرواژه", "کد تأیید",
+        "کد تایید", "احراز هویت", "کارت بانکی", "شبا",
+        "pay", "payment", "checkout", "place order", "order now", "confirm",
+        "submit", "send", "buy", "purchase", "delete", "remove", "login",
+        "log in", "sign in", "sign up", "password", "transfer", "withdraw",
+        "otp", "verify", "save card"
+    )
+
     private var task: ScreenTask? = null
     private var appContext: Context? = null
     private var index = 0
@@ -233,6 +259,18 @@ object ScreenTaskRunner {
         }
         visionReads += 1
         val total = task?.steps?.size?.coerceAtLeast(1) ?: 1
+        /*
+         * اگر گام یک «ضربه» است و برچسبش تعهدآور نیست، به‌جای فقط خواندن،
+         * «عمل» می‌کنیم. این همان حلقهٔ بسته‌ای است که پیش از این نداشتیم:
+         * می‌توانستیم بگوییم روی صفحه چیست، ولی نمی‌توانستیم رویش ضربه
+         * بزنیم — یعنی کنترل صفحه دقیقاً در اپ‌های فلاتر و canvas ناقص
+         * می‌ماند.
+         */
+        if (step.type == "tap_text" && step.payload.isNotBlank() && commitLabel(step.payload) == null) {
+            OverlayController.update("دارم دکمه را پیدا می‌کنم", step.payload, index, total)
+            tryVisualTap(step, svc, deadline, tries)
+            return
+        }
         OverlayController.update("دارم صفحه را می‌بینم", step.payload, index, total)
         worker.execute {
             // بیرون از نخ اصلی. هر خطا رشتهٔ خالی می‌دهد، نه استثنا.
@@ -253,6 +291,62 @@ object ScreenTaskRunner {
                     // خودش با همان راهنمایی ادامه دهد.
                     finish("failed", "«${step.payload}» پیدا نشد. روی صفحه دیدم: ${seen.take(180)}")
                 }
+            }
+        }
+    }
+
+    /**
+     * اگر برچسب یک کنش تعهدآور است، همان کلیدواژه را برمی‌گرداند وگرنه null.
+     * برچسب خالی «تعهدآور» شمرده می‌شود (رشتهٔ خالی برمی‌گرداند) — ضربهٔ
+     * بینایی بدون هدف مشخص یعنی ضربه به نقطهٔ تصادفی.
+     */
+    private fun commitLabel(label: String): String? {
+        val t = label.lowercase().replace("\u200C", " ").trim()
+        if (t.isEmpty()) return ""
+        for (k in COMMIT_LABELS) if (k in t) return k
+        return null
+    }
+
+    /**
+     * ضربهٔ بینایی با «اجارهٔ یک‌بارمصرف».
+     *
+     * ترتیب، و چرا هر گام لازم است:
+     *  ۱. اثرانگشتِ صفحه «پیش از» مکان‌یابی
+     *  ۲. گرفتن مختصات از سرور (که خودش فهرست ممنوعه را چک می‌کند)
+     *  ۳. اثرانگشتِ صفحه «پس از» مکان‌یابی
+     *  ۴. ضربه **فقط** اگر دو اثرانگشت یکسان باشند
+     *
+     * بدون گام ۱ و ۳، مختصاتی که برای صفحهٔ دو ثانیه پیش محاسبه شده روی
+     * صفحهٔ امروز می‌نشیند. این دقیقاً همان باگی است که در منابع بررسی‌شده
+     * به «tapping during the animation hits the wrong coordinates» معروف است.
+     *
+     * و پس از ضربه، گام «دوباره» با همان attempt سنجیده می‌شود — یعنی
+     * اثرِ ضربه راستی‌آزمایی می‌شود، نه اینکه فرض شود کار کرد.
+     */
+    private fun tryVisualTap(step: ScreenStep, svc: ScreenControlService, deadline: Long, tries: Int) {
+        worker.execute {
+            val before = try { svc.screenFingerprint() } catch (e: Exception) { "" }
+            val point = try { svc.locateViaVision(step.payload) } catch (e: Exception) { null }
+            val after = try { svc.screenFingerprint() } catch (e: Exception) { "" }
+            main.post {
+                if (cancelled || !running) return@post
+                if (point == null) {
+                    finish("failed", "دکمهٔ «${step.payload}» را روی صفحه پیدا نکردم.")
+                    return@post
+                }
+                // اجاره باطل شد: صفحه در فاصلهٔ مکان‌یابی عوض شده است.
+                if (before != after) {
+                    finish("failed", "صفحه هنگام پیدا کردن «${step.payload}» عوض شد؛ دوباره تلاش کنید.")
+                    return@post
+                }
+                if (!svc.visualTap(point.x, point.y)) {
+                    finish("failed", "ضربه به «${step.payload}» پذیرفته نشد.")
+                    return@post
+                }
+                // راستی‌آزمایی اثر: همان گام دوباره سنجیده می‌شود. tries+1
+                // یعنی دروازهٔ خوانایی (که فقط در READABILITY_PROBE_AT است)
+                // دوباره فعال نمی‌شود و حلقهٔ بی‌پایان نمی‌سازد.
+                main.postDelayed({ attempt(step, svc, deadline, tries + 1) }, 800)
             }
         }
     }

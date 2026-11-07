@@ -22,7 +22,7 @@ from .database import db
 from .domain import as_hhmm,distance_m,in_quiet_window,share_payload
 from .language import DEFAULT_PATIENCE_MS,assess_risk,fetch_images,find_alias,get_voice_profile,is_smalltalk,learn_alias,match_candidates,normalize_dialect
 from .live import LIVE_MODEL,LIVE_TOKENS_LIMIT,LIVE_VOICE,LIVE_WS_BASE,fetch_live_token,live_system_prompt,live_token_payload,live_vad_config
-from .memory import MEMORY_TURNS,call_llm,call_llm_vision,conversation_summary,recall,remember
+from .memory import MEMORY_TURNS,call_llm,call_llm_vision,call_llm_vision_ground,conversation_summary,recall,remember
 from .primitives import as_float,as_int,as_text,body,idem_key,rows,send
 from .proactive import collect_due_prompts,escalate_stale_prompts
 from .report import report_html
@@ -44,6 +44,43 @@ VISION_MAX_B64 = 400_000
 VISION_IP_CAP = 1024
 _VISION_HITS = {}
 _VISION_LOCK = threading.Lock()
+
+# ── ضربهٔ بینایی: کنش‌های تعهدآور هرگز با مختصات مدل زده نمی‌شوند ──────────
+# چرا این فهرست سمت «سرور» است و نه فقط سمت دستگاه؟ چون ضربهٔ بینایی
+# برگشت‌ناپذیر است: اگر مدل مختصات «پرداخت» را یک سانتی‌متر جابه‌جا بدهد،
+# پول سالمند رفته است. دفاعِ فقط-کلاینت با یک درخواست دست‌ساز دور زده
+# می‌شود. الگو از crew-helper#114: «SEND, payment, purchase, deletion,
+# account, credential … can never use visual coordinates».
+#
+# عمداً «پهن» است. ضربهٔ بینایی برای «ناوبری» است (پیدا کردن یک دسته،
+# یک تب، یک گزینه در فهرست) نه برای «تعهد». اگر برچسبی مبهم است، باید
+# در این فهرست باشد: هزینهٔ اشتباهِ مثبت یک گامِ ناموفق است، هزینهٔ
+# اشتباهِ منفی یک تراکنش بانکی.
+VISION_TAP_DENY = (
+ 'پرداخت', 'ثبت سفارش', 'ثبت و پرداخت', 'تأیید نهایی', 'تایید نهایی',
+ 'ارسال سفارش', 'خرید', 'واریز', 'انتقال وجه', 'برداشت', 'تأیید', 'تایید',
+ 'حذف', 'ورود', 'ثبت نام', 'ثبت‌نام', 'رمز', 'گذرواژه', 'کد تأیید',
+ 'کد تایید', 'احراز هویت', 'کارت بانکی', 'شبا',
+ 'pay', 'payment', 'checkout', 'place order', 'order now', 'confirm',
+ 'submit', 'send', 'buy', 'purchase', 'delete', 'remove', 'login',
+ 'log in', 'sign in', 'sign up', 'password', 'transfer', 'withdraw',
+ 'otp', 'verify', 'save card',
+)
+
+
+def vision_tap_denied(target):
+ """برچسبی که ضربهٔ بینایی برایش ممنوع است را برمی‌گرداند، وگرنه None.
+
+ جدا نگه داشته شد تا مستقل آزموده شود؛ این تنها دروازهٔ میان «مدل یک
+مختصات حدس زد» و «انگشت سالمند روی پولش می‌نشیند» است.
+"""
+ t = (target or '').lower().replace('\u200c', ' ').strip()
+ if not t:
+  return ''
+ for k in VISION_TAP_DENY:
+  if k and k.lower() in t:
+   return k
+ return None
 
 
 def vision_rate_ok(ip):
@@ -772,6 +809,29 @@ class Handler(SimpleHTTPRequestHandler):
    c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'screen_vision_read',json.dumps({'ok':bool(txt),'chars':len(txt or '')},ensure_ascii=False),now())); c.commit()
    if not txt: return send(self,502,{'error':'vision_unavailable','message':'خواندن صفحه با بینایی الان ممکن نیست.'})
    return send(self,200,{'ok':True,'text':txt})
+  if p=='/api/screen/vision/tap':
+   # همان سه قید مسیر خواندن، به‌علاوهٔ یک قید چهارم که فقط اینجا معنا دارد:
+   # این مسیر «مختصات ضربه» می‌دهد، نه متن. پس کنشِ تعهدآور باید رد شود.
+   if not consent_granted(c,'screen_vision'): return send(self,403,{'error':'senior_consent_not_granted','message':'برای دیدن صفحه با بینایی، ابتدا رضایت خود را در بخش حریم خصوصی ثبت کنید.'})
+   img=as_text(d.get('image') or '')
+   if not img: return send(self,400,{'error':'image_required','message':'تصویری ارسال نشد.'})
+   tgt=as_text(d.get('target') or '')
+   if not tgt: return send(self,400,{'error':'target_required','message':'عنصری برای پیدا کردن مشخص نشد.'})
+   _hit=vision_tap_denied(tgt)
+   if _hit:
+    # عمداً 403 نه 400: درخواست «نامعتبر» نیست، «ممنوع» است.
+    c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'screen_vision_tap_denied',json.dumps({'matched':_hit},ensure_ascii=False),now())); c.commit()
+    return send(self,403,{'error':'visual_tap_denied','matched':_hit,'message':'این کار را با دیدن صفحه انجام نمی‌دهم؛ خودتان باید تأییدش کنید.'})
+   if len(img)>VISION_MAX_B64: return send(self,413,{'error':'image_too_large','message':'تصویر بزرگ‌تر از حد مجاز است.','max_chars':VISION_MAX_B64})
+   if not vision_rate_ok(self.client_address[0]): return send(self,429,{'error':'rate_limited','message':'کمی صبر کنید؛ خواندن صفحه پشت‌سرهم ممکن نیست.','retry_after_s':VISION_RATE_WINDOW_S})
+   _g=call_llm_vision_ground(c,img,tgt)
+   # هیچ تصویری ذخیره نمی‌شود؛ فقط «موفق بود یا نه» ثبت می‌شود.
+   c.execute('INSERT INTO events VALUES(?,?,?,?)',(str(uuid.uuid4()),'screen_vision_tap',json.dumps({'ok':bool(_g),'chars':len(img)},ensure_ascii=False),now())); c.commit()
+   # None هم «مدل پایین بود» است هم «عنصر روی صفحه نبود». عمداً تفکیک
+   # نشده: رفتار کلاینت در هر دو حالت یکی است — ضربهٔ بینایی ندارد و
+   # باید به مسیر درخت برگردد یا صادقانه شکست بخورد.
+   if not _g: return send(self,502,{'error':'vision_unavailable','message':'پیدا کردن آن عنصر با دیدن صفحه الان ممکن نیست.'})
+   return send(self,200,{'ok':True,'found':True,'x':_g['x'],'y':_g['y']})
   if p=='/api/screen-tasks':
    rid=str(uuid.uuid4())
    st_tot=as_int(d.get('steps_total') or 0); st_done=as_int(d.get('steps_done') or 0)

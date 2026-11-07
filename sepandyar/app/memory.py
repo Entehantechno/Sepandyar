@@ -98,3 +98,75 @@ def call_llm_vision(c,image_b64,prompt=None,pid='default'):
   with ureq.urlopen(req,timeout=30) as r:
    data=json.loads(r.read()); return data.get('choices',[{}])[0].get('message',{}).get('content')
  except Exception: return None
+
+def call_llm_vision_ground(c,image_b64,target,pid='default'):
+ """مختصاتِ «یک عنصر مشخص» روی تصویر صفحه، به‌صورت نرمال‌شده.
+
+ چرا این تابع جدا از call_llm_vision است؟
+  - call_llm_vision «متن» صفحه را می‌خواهد؛ این یکی «مکان» یک عنصر را.
+    پرسش، پاسخ و تجزیهٔ هر دو فرق دارد و قاطی کردنشان هر دو را خراب
+    می‌کرد.
+  - خروجی **عدد** است نه متن. یک مدل بینایی می‌تواند متن را تقریباً
+    درست بخواند ولی مختصات را کمی جابه‌جا بدهد؛ پس اینجا سخت‌گیرانه
+    تجزیه می‌کنیم و هر چیز مشکوک None می‌شود.
+
+ **چرا مختصات نرمال‌شده (۰ تا ۱) و نه پیکسل؟** تصویر سمت دستگاه به عرض
+ ۷۲۰ کوچک شده (VISION_MAX_W) ولی صفحهٔ واقعی می‌تواند ۱۰۸۰ یا ۱۴۴۰
+ باشد. اگر پیکسلِ تصویر را مستقیم برای ضربه استفاده می‌کردیم، روی هر
+ دستگاهی با وضوح متفاوت به نقطهٔ غلط می‌زدیم. نرمال‌سازی این دسته باگ را
+ از اساس حذف می‌کند.
+
+ @return {'found':bool,'x':float,'y':float} یا None در هر حالت خطا.
+ """
+ cfg=c.execute('SELECT * FROM ai_config WHERE id=1').fetchone(); key=os.getenv('OPENROUTER_API_KEY') or os.getenv('OPENAI_API_KEY')
+ if not key or not cfg or not image_b64 or not (target or '').strip(): return None
+ base=(cfg['base_url'] or 'https://openrouter.ai/api/v1').rstrip('/')+'/chat/completions'
+ ask=('عنصر «%s» را روی این تصویر صفحهٔ گوشی پیدا کن. '
+      'فقط یک شیء JSON بده، بدون هیچ توضیح دیگری، به این شکل: '
+      '{"found": true, "x": 0.52, "y": 0.83} '
+      'که x و y مختصات «مرکز» آن عنصر، نرمال‌شده بین ۰ و ۱ نسبت به عرض و '
+      'ارتفاع تصویر است. اگر آن عنصر روی تصویر نیست، بده '
+      '{"found": false}.' % target.strip()[:120])
+ system=('تو یک مکان‌یاب عناصر رابط کاربری هستی. فقط JSON خام برگردان. '
+         'هرگز حدس نزن: اگر عنصر را واضح نمی‌بینی، found را false بده.')
+ content=[{'type':'text','text':ask},
+          {'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+image_b64}}]
+ payload={'model':cfg['model'],'temperature':0.0,'messages':[{'role':'system','content':system},{'role':'user','content':content}]}
+ try:
+  req=ureq.Request(base,data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','HTTP-Referer':'https://sepandyar.local','X-Title':'Sepandyar'},method='POST')
+  with ureq.urlopen(req,timeout=30) as r:
+   raw=json.loads(r.read()).get('choices',[{}])[0].get('message',{}).get('content') or ''
+ except Exception: return None
+ return parse_ground(raw)
+
+
+def parse_ground(raw):
+ """تجزیهٔ سخت‌گیرانهٔ پاسخ مکان‌یاب.
+
+ جدا از call_llm_vision_ground نگه داشته شد تا مستقل آزموده شود؛ این تابع
+ تنها جایی است که «رشتهٔ مدل» به «عدد» تبدیل می‌شود و هر باگ اینجا یعنی
+ ضربه به نقطهٔ اشتباه روی گوشی سالمند.
+
+ سه حالتی که عمداً None می‌شوند:
+  - JSON نامعتبر یا پوشیده در ``` (مدل‌ها اغلب حصار می‌گذارند)
+  - found صریحاً false
+  - x یا y بیرون از [0,1] — حتی یک عددِ کمی بزرگ‌تر یعنی مدل پیکسل داده،
+    و ضربه به پیکسلِ تصویر روی صفحهٔ واقعی به نقطهٔ کاملاً غلط می‌خورد.
+ """
+ if not raw or not isinstance(raw,str): return None
+ t=raw.strip()
+ # مدل‌ها پاسخ را در حصار کد می‌گذارند؛ بدون این پاک‌سازی json.loads شکست می‌خورد
+ if t.startswith('```'):
+  t=t.strip('`')
+  if t[:4].lower()=='json': t=t[4:]
+  t=t.strip()
+ i,j=t.find('{'),t.rfind('}')
+ if i<0 or j<=i: return None
+ try: o=json.loads(t[i:j+1])
+ except Exception: return None
+ if not isinstance(o,dict) or o.get('found') is not True: return None
+ try: x=float(o.get('x')); y=float(o.get('y'))
+ except Exception: return None
+ if not (0.0<=x<=1.0 and 0.0<=y<=1.0): return None
+ return {'found':True,'x':x,'y':y}
+

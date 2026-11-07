@@ -716,6 +716,99 @@ class ScreenControlService : AccessibilityService() {
     }
 
     /**
+     * اثرانگشتِ ارزانِ وضعیت جاری صفحه.
+     *
+     * **چرا لازم است؟** مختصاتی که مدل بینایی می‌دهد مربوط به «همان لحظهٔ
+     * گرفتن تصویر» است. اگر تا لحظهٔ ضربه صفحه عوض شده باشد — اعلان آمده،
+     * انیمیشن تمام شده، پنجرهٔ دیگری بالا آمده — آن مختصات به نقطهٔ
+     * کاملاً غلطی می‌خورد. پس پیش و پس از مکان‌یابی اثرانگشت می‌گیریم و
+     * فقط اگر «یکسان» ماند ضربه می‌زنیم. همان ایدهٔ VisualTapLease در
+     * crew-helper#114: مختصات یک‌بارمصرف است و اعتبارش به ثابت ماندن صفحه
+     * بند است.
+     *
+     * عمداً «ارزان» است (طول متن + hashCode + شمار فرزندان)، نه هشِ کل
+     * درخت: این دو بار در هر تلاش خوانده می‌شود و نباید گران شود.
+     */
+    fun screenFingerprint(): String {
+        val root = rootInActiveWindow
+        val text = try { readScreenText() } catch (e: Exception) { "" }
+        return "${root?.packageName ?: ""}|${text.length}|${text.hashCode()}|${root?.childCount ?: -1}"
+    }
+
+    /**
+     * پیدا کردنِ «مکانِ» یک عنصر با بینایی.
+     *
+     * تفاوتش با `readScreenViaVision` در یک کلمه است: آن یکی **متن**
+     * می‌دهد و این یکی **مختصات**. بدون این، ما می‌توانستیم صفحه را برای
+     * سالمند بخوانیم ولی نمی‌توانستیم رویش کاری انجام دهیم — یعنی کنترل
+     * صفحه دقیقاً در همان اپ‌هایی که بیشترین نیاز را دارند (فلاتر،
+     * canvas، WebView) ناقص می‌ماند.
+     *
+     * **مختصات نرمال‌شده برمی‌گرداند (۰ تا ۱)، نه پیکسل.** تصویر سمت ما به
+     * عرض ۷۲۰ کوچک شده ولی صفحهٔ واقعی ۱۰۸۰ یا ۱۴۴۰ است؛ اگر پیکسلِ تصویر
+     * را مستقیم برای ضربه استفاده می‌کردیم، روی هر دستگاهی با وضوح متفاوت
+     * به نقطهٔ غلط می‌زدیم.
+     *
+     * **حتماً از نخ پس‌زمینه صدا زده شود** (هم captureForVision و هم شبکه
+     * blocking اند).
+     *
+     * @return مختصات نرمال‌شده، یا null در هر حالت خطا.
+     */
+    fun locateViaVision(target: String): VisionPoint? {
+        if (target.isBlank()) return null
+        val img = captureForVision()
+        if (img.isBlank()) return null
+        val base = getSharedPreferences("assistant", Context.MODE_PRIVATE)
+            .getString("server_url", "")?.trim()?.trimEnd('/') ?: ""
+        if (base.isEmpty()) return null
+        var conn: HttpURLConnection? = null
+        return try {
+            val body = JSONObject()
+                .put("image", img)
+                .put("target", target)
+                .toString().toByteArray(Charsets.UTF_8)
+            conn = (URL("$base/api/screen/vision/tap").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = VISION_HTTP_TIMEOUT_MS
+                readTimeout = VISION_HTTP_TIMEOUT_MS
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            conn.outputStream.use { it.write(body) }
+            if (conn.responseCode !in 200..299) return null
+            val raw = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val o = JSONObject(raw)
+            if (!o.optBoolean("found", false)) return null
+            val x = o.optDouble("x", -1.0)
+            val y = o.optDouble("y", -1.0)
+            // سرور هم این را چک می‌کند؛ اینجا دوباره چک می‌کنیم چون ضربهٔ
+            // بیرون از صفحه نه تنها بی‌فایده است که می‌تواند به نقطهٔ
+            // نامعلومی برود (مختصات منفی توسط dispatchGesture رد می‌شود،
+            // ولی مختصاتِ بیش‌ازحد بزرگ نه).
+            if (x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0) return null
+            VisionPoint(x.toFloat(), y.toFloat())
+        } catch (e: Exception) {
+            null
+        } finally {
+            try { conn?.disconnect() } catch (e: Exception) { }
+        }
+    }
+
+    /**
+     * ضربه به مختصات «نرمال‌شده».
+     *
+     * تنها راهِ ضربه زدن به صفحه‌ای که گره‌ای در درخت ندارد. عمداً عمومی
+     * است ولی تنها فراخوانش در ScreenTaskRunner است، و آن‌جا سه قید دارد:
+     * برچسب تعهدآور نباشد، اثرانگشت صفحه عوض نشده باشد، و شمارشگر بینایی
+     * از کران رد نشده باشد.
+     */
+    fun visualTap(nx: Float, ny: Float): Boolean {
+        if (nx < 0f || nx > 1f || ny < 0f || ny > 1f) return false
+        val dm = resources.displayMetrics
+        return tap(nx * dm.widthPixels, ny * dm.heightPixels)
+    }
+
+    /**
      * نشانگر بصری پیش از گرفتن تصویر. اگر این نبود، سالمند هرگز نمی‌فهمید
      * که از صفحه‌اش تصویر گرفته شده است.
      */
@@ -746,3 +839,11 @@ class ScreenControlService : AccessibilityService() {
     }
 
 }
+
+/**
+ * مختصات نرمال‌شدهٔ یک عنصر روی صفحه (۰ تا ۱ نسبت به عرض و ارتفاع).
+ *
+ * نرمال‌شده نگه داشته شد چون تصویرِ ارسالی و صفحهٔ واقعی وضوح‌های
+ * متفاوتی دارند.
+ */
+data class VisionPoint(val x: Float, val y: Float)
