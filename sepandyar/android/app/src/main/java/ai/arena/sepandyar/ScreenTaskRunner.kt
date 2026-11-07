@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import java.util.concurrent.Executors
 
 /**
  * هماهنگ‌کننده کنترل اپ مقصد.
@@ -17,6 +18,62 @@ import android.os.SystemClock
  */
 object ScreenTaskRunner {
     private val main = Handler(Looper.getMainLooper())
+
+    /**
+     * نخِ خواندن با بینایی.
+     *
+     * چرا جدا؟ `captureForVision` با `CountDownLatch` منتظر می‌ماند و
+     * `readScreenViaVision` یک درخواست شبکهٔ blocking است. `attempt()` روی
+     * نخ اصلی اجرا می‌شود؛ صدا زدن مستقیم یعنی ANR. عمداً «تک‌نخی» است تا
+     * هرگز دو تصویر هم‌زمان از صفحهٔ سالمند گرفته نشود.
+     */
+    private val worker = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "sepandyar-vision").apply { isDaemon = true }
+    }
+
+    /**
+     * گام‌هایی که بدون گره‌های درختِ دسترس‌پذیری هیچ معنا ندارند.
+     *
+     * گام‌های سراسری (back/home/scroll/tap_xy/…) عمداً اینجا نیستند: آن‌ها
+     * به درخت نیاز ندارند و خالی بودنش برای‌شان «خرابی» نیست. اگر این تفکیک
+     * نبود، یک «home» ساده روی اپی با درخت نازک به‌اشتباه «نمی‌بینم» می‌گرفت.
+     */
+    private val NEEDS_TREE = setOf(
+        "tap_text", "tap_id", "input_text", "ime_enter", "submit", "long_click",
+        "focus", "a11y_focus", "next_node", "prev_node", "select_text", "select_all",
+        "copy", "cut", "paste", "clear_text", "append_text", "expand", "collapse",
+        "set_progress", "double_tap"
+    )
+
+    /**
+     * در چندمین تلاش، خوانایی درخت سنجیده شود.
+     *
+     * نه در تلاش صفر: میانِ جابه‌جایی صفحه `rootInActiveWindow` می‌تواند
+     * موقتاً null باشد و درخت خالی به‌نظر برسد. یک تلاش صبر می‌کنیم.
+     */
+    private const val READABILITY_PROBE_AT = 1
+
+    /**
+     * سقف خواندن‌های بینایی در **یک کار**.
+     *
+     * چرا کران دارد؟ هر فراخوانی یک تصویر از صفحهٔ سالمند به سرور می‌فرستد
+     * که می‌تواند پیامک و موجودی بانکی داشته باشد، و سرور هم
+     * `/api/screen/vision` را به ۶ بار در ۶۰ ثانیه محدود کرده. بدون این کران
+     * یک کار با چهار گامِ نشدنی، چهار تصویر بی‌فایده می‌فرستاد.
+     */
+    private const val MAX_VISION_READS = 2
+
+    /**
+     * پیامِ شکست وقتی درخت خوانا نیست.
+     *
+     * عمداً با «پیدا نشد» فرق دارد. «پیدا نشد» یعنی دکمه نیست — که دروغ است:
+     * دکمه هست، ما نمی‌بینیمش. این پیام راه‌حل را می‌گوید، نه بن‌بست را.
+     */
+    private const val UNREADABLE_HINT =
+        "متن این صفحه خوانده نمی‌شود. اگر در بخش حریم خصوصی «دیدن صفحه» را روشن کنید، می‌توانم صفحه را ببینم."
+
+    /** شمارشگر خواندن‌های بیناییِ کارِ جاری. در start() صفر می‌شود. */
+    private var visionReads = 0
 
     private var task: ScreenTask? = null
     private var appContext: Context? = null
@@ -57,6 +114,7 @@ object ScreenTaskRunner {
             task = parsed
             index = 0
             cancelled = false
+            visionReads = 0
             running = true
             startedAt = SystemClock.elapsedRealtime()
             OverlayController.show(app, "سپندیار در حال انجام کار") { cancel() }
@@ -128,12 +186,90 @@ object ScreenTaskRunner {
             main.postDelayed({ runStep() }, 350)
             return
         }
+        /*
+         * ── درخت دسترس‌پذیری اصلاً خوانا هست؟ ──────────────────────────
+         * اپ‌های فلاتر، بازی‌های canvas و صفحه‌های FLAG_SECURE هیچ گرهٔ
+         * متنی بیرون نمی‌دهند. در آن حالت تلاشِ مجدد **قطعاً** بی‌فایده است،
+         * چون همان درختی خالی است که performStep از آن گره پیدا می‌کند.
+         *
+         * پیش از این، شش بار تلاش می‌کردیم و ««X» پیدا نشد» می‌گفتیم —
+         * پیامی که سالمند را به خطا می‌انداخت. حالا یک بار خوانایی سنجیده
+         * می‌شود و اگر خالی بود، یا مسیر بینایی می‌رود یا صادقانه و
+         * زودهنگام شکست می‌خورد.
+         */
+        if (step.type in NEEDS_TREE && tries == READABILITY_PROBE_AT &&
+            svc.readScreenText().isBlank()
+        ) {
+            unreadableScreen(step, svc, deadline, tries)
+            return
+        }
         if (SystemClock.elapsedRealtime() < deadline && tries < 6) {
             OverlayController.update("در جست‌وجوی «${step.payload}»", "تلاش ${tries + 1}", index, task?.steps?.size?.coerceAtLeast(1) ?: 1)
             main.postDelayed({ attempt(step, svc, deadline, tries + 1) }, 650)
             return
         }
         finish("failed", "«${step.payload}» روی صفحه پیدا نشد")
+    }
+
+    /**
+     * درخت خالی است: یا با بینایی صفحه را می‌خوانیم، یا صادقانه می‌گوییم
+     * که نمی‌بینیم.
+     *
+     * سه راهی که همه به «شکستِ صادقانه» ختم می‌شوند مگر آن یکی که واقعاً
+     * متن می‌دهد — چون حدس زدن روی صفحه‌ای که ندیده‌ایم، همان باگی است که
+     * در گام `confirm` عمداً بستیم («تأییدِ کور ممنوع»).
+     */
+    private fun unreadableScreen(step: ScreenStep, svc: ScreenControlService, deadline: Long, tries: Int) {
+        // کران پر شده، یا رضایت نیست، یا چیزی برای مقایسه نداریم.
+        if (visionReads >= MAX_VISION_READS || !ScreenControlService.visionAllowed(svc)) {
+            finish("failed", UNREADABLE_HINT)
+            return
+        }
+        if (step.expect.isBlank()) {
+            // بدون expect هیچ معیاری برای سنجش متنِ بینایی نداریم. بینایی
+            // «متن» می‌دهد نه «مختصات»؛ پس نمی‌تواند جای گره را برای ضربه بگیرد.
+            finish("failed", UNREADABLE_HINT)
+            return
+        }
+        visionReads += 1
+        val total = task?.steps?.size?.coerceAtLeast(1) ?: 1
+        OverlayController.update("دارم صفحه را می‌بینم", step.payload, index, total)
+        worker.execute {
+            // بیرون از نخ اصلی. هر خطا رشتهٔ خالی می‌دهد، نه استثنا.
+            val seen = try { svc.readScreenViaVision() } catch (e: Exception) { "" }
+            main.post {
+                // در فاصلهٔ انتظار ممکن است سالمند لغو کرده یا کار تمام شده باشد.
+                if (cancelled || !running) return@post
+                if (seen.isBlank()) {
+                    finish("failed", "نتوانستم متن این صفحه را بخوانم. کمی بعد دوباره تلاش کنید.")
+                    return@post
+                }
+                if (textHas(seen, step.expect)) {
+                    // وضعیتِ مورد انتظار گام روی صفحه هست؛ گام را جلو می‌بریم.
+                    index += 1
+                    main.postDelayed({ runStep() }, 550)
+                } else {
+                    // صادقانه: چه می‌خواستیم و چه دیدیم. سالمند می‌تواند
+                    // خودش با همان راهنمایی ادامه دهد.
+                    finish("failed", "«${step.payload}» پیدا نشد. روی صفحه دیدم: ${seen.take(180)}")
+                }
+            }
+        }
+    }
+
+    /**
+     * مقایسهٔ متنِ بینایی با `expect` — با همان نرمال‌سازیِ گره‌ها.
+     *
+     * چرا `SmartSelector.normalize` و نه `contains` ساده؟ مدل بینایی متن را
+     * از پیکسل می‌خواند و بی‌نهایت تغییر شکل می‌دهد: «ی» عربی به‌جای فارسی،
+     * رقم عربی به‌جای فارسی، نیم‌فاصلهٔ از دست رفته. اگر گره‌ها را
+     * نرمال‌سازی می‌کردیم ولی این مقایسه را نه، یک صفحهٔ درست «پیدا نشد»
+     * می‌گرفت.
+     */
+    private fun textHas(haystack: String, needle: String): Boolean {
+        val h = SmartSelector.normalize(haystack)
+        val n = SmartSelector.normalize(needle)
+        return n.isNotEmpty() && h.contains(n)
     }
 
     /**

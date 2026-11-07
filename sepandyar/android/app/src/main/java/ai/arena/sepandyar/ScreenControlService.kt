@@ -14,9 +14,15 @@ import android.util.Base64
 import android.view.Display
 import android.view.accessibility.AccessibilityNodeInfo
 import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+// Charsets در kotlin.text.* است و پیش‌فرض import می‌شود، ولی صریح
+// آوردنش هزینه‌ای ندارد و کد را از «به کدام Charsets؟» بی‌نیاز می‌کند.
+import kotlin.text.Charsets
 
 class ScreenControlService : AccessibilityService() {
     companion object {
@@ -42,6 +48,13 @@ class ScreenControlService : AccessibilityService() {
         const val VISION_JPEG_Q = 72
         /** سقف انتظار برای پاسخ takeScreenshot. */
         const val VISION_TIMEOUT_MS = 3000L
+        /**
+         * سقف انتظار برای پاسخ `/api/screen/vision`.
+         *
+         * عمداً بزرگ‌تر از VISION_TIMEOUT_MS است: این یکی یک رفت‌وبرگشت کامل به
+         * سرور و سپس یک فراخوانی به مدل بیرونی است، نه یک callback محلی.
+         */
+        const val VISION_HTTP_TIMEOUT_MS = 20000
         /** مدت نمایش نشانگر «دارم صفحه را می‌بینم». */
         const val VISION_INDICATOR_MS = 1600L
 
@@ -651,6 +664,55 @@ class ScreenControlService : AccessibilityService() {
         }
         try { done.await(VISION_TIMEOUT_MS, TimeUnit.MILLISECONDS) } catch (e: InterruptedException) { return "" }
         return out.get() ?: ""
+    }
+
+    /**
+     * خواندن متن صفحه از راه بینایی: تصویر → سرور → متن.
+     *
+     * **حتماً باید از نخ پس‌زمینه صدا زده شود.** هم `captureForVision` با
+     * `CountDownLatch` منتظر می‌ماند و هم این درخواست شبکه blocking است؛
+     * صدا زدنش از نخ اصلی یعنی ANR. تنها فراخوانش در
+     * `ScreenTaskRunner` است و آن‌جا روی یک executor تک‌نخی می‌نشیند.
+     *
+     * در **هر** حالت خطا رشتهٔ خالی برمی‌گرداند، نه استثنا — چون در
+     * مسیر کنترل صفحه صدا زده می‌شود و یک استثنای نگرفته یعنی کارِ
+     * سالمند نصفه‌کاره و بدون گزارش رها شود.
+     *
+     * توجه: این تابع هیچ قید حریم جدیدی اضافه نمی‌کند و نیازی هم ندارد؛
+     * `captureForVision` خودش رضایت و API 30+ را چک می‌کند و سرور هم
+     * `consent_granted('screen_vision')` را. دو لایه، هر دو لازم.
+     *
+     * @return متن خوانده‌شده، یا رشتهٔ خالی در هر حالت خطا.
+     */
+    fun readScreenViaVision(): String {
+        val img = captureForVision()
+        if (img.isBlank()) return ""
+        // همان کلیدی که AppBridge.saveServerUrl می‌نویسد؛ منبع دوم حقیقت نساختیم.
+        val base = getSharedPreferences("assistant", Context.MODE_PRIVATE)
+            .getString("server_url", "")?.trim()?.trimEnd('/') ?: ""
+        if (base.isEmpty()) return ""
+        var conn: HttpURLConnection? = null
+        return try {
+            val body = JSONObject().put("image", img).toString().toByteArray(Charsets.UTF_8)
+            conn = (URL("$base/api/screen/vision").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = VISION_HTTP_TIMEOUT_MS
+                readTimeout = VISION_HTTP_TIMEOUT_MS
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            conn.outputStream.use { it.write(body) }
+            // 403 (رضایت)، 413 (بزرگ)، 429 (نرخ)، 502 (مدل) همه همین‌جا
+            // رشتهٔ خالی می‌شوند. تفاوتشان برای «ادامهٔ کار» بی‌اهمیت است:
+            // در هر چهار حالت ما متنی نداریم.
+            if (conn.responseCode !in 200..299) return ""
+            val raw = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            JSONObject(raw).optString("text", "").trim()
+        } catch (e: Exception) {
+            ""
+        } finally {
+            try { conn?.disconnect() } catch (e: Exception) { }
+        }
     }
 
     /**

@@ -1045,6 +1045,177 @@ check('بخش۱۵ timeout شبکه دارد', 'connectTimeout' in _af15 and 'rea
 check('بخش۱۵ هیچ API دسترس‌پذیری در این فایل نیست',
       not any(k in _af15c for k in ('AccessibilityService','AccessibilityNodeInfo','dispatchGesture')), '')
 
+
+# ════════════════════════════════════════════════════════════════════════
+# بخش ۱۶ — fallback بینایی وقتی درخت دسترس‌پذیری خالی است
+#
+# ریشه در بررسی گیت‌هاب: droidrun/mobilerun صریحاً --vision-only دارد و
+# دلیلش را خودش می‌گوید: «useful for the apps that do not have a11y tree
+# information». ما captureForVision را داشتیم ولی opt-in، سمت وب، و
+# بی‌ارتباط با حلقهٔ گام‌ها. نتیجه: در یک اپ فلاتر شش تلاش بی‌فایده و
+# سپس ««X» پیدا نشد» — پیامی که دروغ است، چون دکمه هست و ما نمی‌بینیمش.
+# ════════════════════════════════════════════════════════════════════════
+_rn16 = open(os.path.join(KT, 'ScreenTaskRunner.kt'), encoding='utf-8').read()
+_sc16 = open(os.path.join(KT, 'ScreenControlService.kt'), encoding='utf-8').read()
+_rn16c = strip_kotlin(_rn16)
+_sc16c = strip_kotlin(_sc16)
+
+def _body16(name, src):
+    """بدنهٔ یک fun با تطبیق کروشه.
+
+    پنجرهٔ ثابت اینجا غلط می‌داد: attempt() کوتاه است و یک پنجرهٔ ۹۰۰
+    کاراکتری به unreadableScreen() سرریز می‌کرد و سنجش‌ها را «قبول» می‌کرد.
+    """
+    m = re.search(r'\bfun %s\(' % re.escape(name), src)
+    if not m: return ''
+    j = src.find('{', m.end())
+    if j < 0: return ''
+    d = 0
+    for k in range(j, len(src)):
+        if src[k] == '{': d += 1
+        elif src[k] == '}':
+            d -= 1
+            if d == 0: return src[m.start():k + 1]
+    return ''
+
+# ── ۱۶٫۱) مجموعهٔ گام‌های وابسته به درخت: تهی نیست و ساختگی نیست ──────
+# از منبع «خام»، نه strip‌شده: strip_kotlin رشته‌ها را حذف می‌کند و
+# اعضای NEEDS_TREE همه رشته‌اند. نسخهٔ نخست از _rn16c می‌خواند و مجموعهٔ
+# «خالی» می‌گرفت — یعنی سنجش تهی بود و خودش هم تهی بودن را گزارش داد.
+_m16 = re.search(r'NEEDS_TREE\s*=\s*setOf\(([^)]*)\)', _rn16, re.S)
+check('بخش۱۶ NEEDS_TREE استخراج شد (سنجش تهی نیست)', _m16 is not None, '')
+_nt16 = set(re.findall(r'"([^"]+)"', _m16.group(1))) if _m16 else set()
+check('بخش۱۶ NEEDS_TREE تهی نیست', len(_nt16) >= 10, len(_nt16))
+_bogus16 = sorted(_nt16 - STEP_TYPES)
+check('بخش۱۶ هیچ نوع گامِ ساختگی در NEEDS_TREE نیست', not _bogus16, _bogus16)
+
+# ── ۱۶٫۲) گام‌های سراسری عمداً بیرون‌اند ─────────────────────────────
+# این تفکیک بارِ اصلیِ طراحی است. اگر home/back داخل بودند، یک «بازگشت»
+# ساده روی اپی با درخت نازک به‌اشتباه «نمی‌بینم» می‌گرفت و کار می‌خوابید.
+_glob16 = {'home', 'back', 'recents', 'scroll', 'swipe', 'tap_xy', 'wait',
+           'launch', 'confirm', 'lock_screen', 'notifications', 'screenshot',
+           'a11y_back', 'a11y_home', 'dismiss_notifications', 'pinch', 'drag',
+           'quick_settings', 'power_dialog', 'split_screen', 'headset_hook',
+           'a11y_all_apps', 'a11y_recents'}
+_leak16 = sorted(_glob16 & _nt16)
+check('بخش۱۶ گام‌های سراسری (بدون نیاز به درخت) بیرون مانده‌اند', not _leak16, _leak16)
+# پارتیشن کامل: هیچ نوع گامی نباید بی‌تکلیف بماند.
+check('بخش۱۶ NEEDS_TREE ⊂ STEP_TYPES و پارتیشن کامل است',
+      _nt16 | _glob16 == STEP_TYPES, sorted(STEP_TYPES - (_nt16 | _glob16)))
+
+# ── ۱۶٫۳) دروازهٔ خوانایی «داخل attempt» و «پیش از» حلقهٔ تلاش ──────
+_att16 = _body16('attempt', _rn16c)
+check('بخش۱۶ بدنهٔ attempt تهی استخراج نشد (سنجش تهی نیست)',
+      len(_att16) > 300 and 'performStep' in _att16, len(_att16))
+check('بخش۱۶ دروازهٔ خوانایی داخل attempt است', 'NEEDS_TREE' in _att16, '')
+check('بخش۱۶ دروازه خوانایی درخت را می‌سنجد', 'readScreenText().isBlank()' in _att16, '')
+_g16 = _att16.find('NEEDS_TREE')
+_r16 = _att16.find('tries < 6')
+check('بخش۱۶ دروازه «پیش از» حلقهٔ تلاش است (وگرنه فایده‌ای ندارد)',
+      0 <= _g16 < _r16, (_g16, _r16))
+
+# ── ۱۶٫۴) بینایی روی نخ پس‌زمینه است، نه نخ اصلی (ANR) ──────────────
+# captureForVision با CountDownLatch منتظر می‌ماند و درخواست شبکه blocking
+# است. attempt() روی Handler(mainLooper) اجرا می‌شود.
+check('بخش۱۶ executor جدا برای بینایی تعریف شده', 'Executors.newSingleThreadExecutor' in _rn16c, '')
+check('بخش۱۶ executor تک‌نخی است (دو تصویر هم‌زمان گرفته نمی‌شود)',
+      'newSingleThreadExecutor' in _rn16c and 'newFixedThreadPool' not in _rn16c, '')
+check('بخش۱۶ readScreenViaVision مستقیم از attempt صدا زده نمی‌شود',
+      'readScreenViaVision' not in _att16, '')
+_un16 = _body16('unreadableScreen', _rn16c)
+check('بخش۱۶ بدنهٔ unreadableScreen تهی استخراج نشد (سنجش تهی نیست)',
+      len(_un16) > 300, len(_un16))
+check('بخش۱۶ خواندن بینایی داخل worker.execute است',
+      'worker.execute' in _un16 and 'readScreenViaVision' in _un16, '')
+_wi16 = _un16.find('worker.execute'); _rv16 = _un16.find('readScreenViaVision')
+check('بخش۱۶ فراخوانی بینایی «بعد از» ورود به worker است', 0 <= _wi16 < _rv16, (_wi16, _rv16))
+
+# ── ۱۶٫۵) کران فراخوانی: هر تصویر، پیامک و موجودی بانکی دارد ───────
+check('بخش۱۶ کران MAX_VISION_READS تعریف شده', 'MAX_VISION_READS' in _rn16c, '')
+_mx16 = re.search(r'MAX_VISION_READS\s*=\s*(\d+)', _rn16c)
+check('بخش۱۶ کران عددِ کوچک است (سرور ۶ بار در ۶۰ ثانیه اجازه می‌دهد)',
+      _mx16 is not None and 1 <= int(_mx16.group(1)) <= 3, _mx16 and _mx16.group(1))
+check('بخش۱۶ شمارشگر «پیش از» فراخوانی زیاد می‌شود',
+      'visionReads += 1' in _un16 and _un16.find('visionReads += 1') < _un16.find('worker.execute'), '')
+# محدود به بدنهٔ start(). نسخهٔ نخست فقط می‌پرسید «این رشته در فایل هست؟»
+# و خودِ تعریفِ «private var visionReads = 0» همان رشته را داشت — پس پروبِ
+# حذفِ بازنشانی گرفته نشد. سومین باری که یک سنجشِ «حضورِ رشته» تهی از آب
+# درآمد.
+_st16 = _body16('start', _rn16c)
+check('بخش۱۶ بدنهٔ start تهی استخراج نشد (سنجش تهی نیست)',
+      len(_st16) > 300 and 'running = true' in _st16, len(_st16))
+check('بخش۱۶ شمارشگر در start() صفر می‌شود (کران بین کارها نشت نمی‌کند)',
+      'visionReads = 0' in _st16, '')
+check('بخش۱۶ بازنشانی «پیش از» شروع گام‌هاست',
+      0 <= _st16.find('visionReads = 0') < _st16.find('runStep'),
+      (_st16.find('visionReads = 0'), _st16.find('runStep')))
+
+# ── ۱۶٫۶) رضایت پیش از تصویر؛ هیچ مسیرِ دورزدنی نیست ────────────────
+check('بخش۱۶ رضایت بینایی پیش از هر تصویر سنجیده می‌شود',
+      'visionAllowed' in _un16 and _un16.find('visionAllowed') < _un16.find('worker.execute'), '')
+_rvv16 = _body16('readScreenViaVision', _sc16c)
+check('بخش۱۶ بدنهٔ readScreenViaVision تهی استخراج نشد (سنجش تهی نیست)',
+      len(_rvv16) > 200, len(_rvv16))
+check('بخش۱۶ readScreenViaVision از captureForVision می‌گذرد (دور نمی‌زند)',
+      'captureForVision()' in _rvv16 and 'takeScreenshot' not in _rvv16, '')
+check('بخش۱۶ captureForVision همچنان با رضایت و API 30+ دروازه شده',
+      'visionAllowed(this)' in _sc16c and 'SDK_INT < 30' in _sc16c, '')
+
+# ── ۱۶٫۷) پیامِ صادقانه، نه «پیدا نشد» ───────────────────────────────
+_hint16 = re.search(r'UNREADABLE_HINT\s*=\s*\n?\s*"([^"]+)"', _rn16)
+check('بخش۱۶ پیامِ درختِ‌ناخوانا تعریف شده', _hint16 is not None, '')
+if _hint16:
+    _h16 = _hint16.group(1)
+    check('بخش۱۶ پیام با «پیدا نشد» فرق دارد (وگرنه همان دروغ قبلی است)',
+          'پیدا نشد' not in _h16, _h16)
+    check('بخش۱۶ پیام راه‌حل را می‌گوید، نه فقط بن‌بست را',
+          'دیدن صفحه' in _h16, _h16)
+check('بخش۱۶ مسیر شکستِ ناخوانا واقعاً به UNREADABLE_HINT می‌رسد',
+      'UNREADABLE_HINT' in _un16, '')
+
+# ── ۱۶٫۸) مقایسه با همان نرمال‌سازیِ گره‌ها ─────────────────────────
+# مدل بینایی متن را از پیکسل می‌خواند: «ی» عربی، رقم عربی، نیم‌فاصلهٔ
+# از دست رفته. اگر گره‌ها نرمال می‌شدند ولی این مقایسه نه، صفحهٔ درست
+# «پیدا نشد» می‌گرفت.
+_th16 = _body16('textHas', _rn16c)
+check('بخش۱۶ textHas هر دو طرف را نرمال می‌کند',
+      _th16.count('SmartSelector.normalize') == 2, _th16.count('SmartSelector.normalize'))
+check('بخش۱۶ مقایسهٔ بینایی با contains خام نیست',
+      'h.contains(n)' in _th16 and 'seen.contains(step.expect)' not in _rn16c, '')
+
+# ── ۱۶٫۹) لغو در فاصلهٔ انتظارِ شبکه ─────────────────────────────────
+check('بخش۱۶ بازگشت از worker، لغو را می‌سنجد',
+      'if (cancelled || !running) return@post' in _rn16c, '')
+
+# ── ۱۶٫۱۰) دروازهٔ confirm دست‌نخورده ───────────────────────────────
+# بینایی فقط «می‌خواند». هرگز جای تأیید سالمند را نمی‌گیرد.
+check('بخش۱۶ confirm در NEEDS_TREE نیست (هرگز از مسیر بینایی نمی‌گذرد)',
+      'confirm' not in _nt16, '')
+# ساختاری و بی‌رشته: در منبع strip‌شده «confirm» وجود ندارد، پس سنجشِ
+# رشته‌ای اینجا همیشه شکست می‌خورد. در عوض «ترتیب» را می‌سنجیم.
+_rs16 = _body16('runStep', _rn16c)
+check('بخش۱۶ بدنهٔ runStep تهی استخراج نشد (سنجش تهی نیست)',
+      len(_rs16) > 200 and 'askConfirm' in _rs16, len(_rs16))
+check('بخش۱۶ confirm همچنان پیش از attempt جدا می‌شود',
+      0 <= _rs16.find('askConfirm') < _rs16.find('attempt(step'),
+      (_rs16.find('askConfirm'), _rs16.find('attempt(step')))
+check('بخش۱۶ مسیر بینایی هیچ کنشِ تغییری ندارد (فقط می‌خواند)',
+      not any(k in _un16 for k in ('performStep', 'dispatchGesture', 'performAction')), '')
+
+# ── ۱۶٫۱۱) شبکه: timeout و شکستِ بی‌صدا ──────────────────────────────
+check('بخش۱۶ readScreenViaVision timeout اتصال و خواندن دارد',
+      'connectTimeout' in _rvv16 and 'readTimeout' in _rvv16, '')
+check('بخش۱۶ خطای شبکه استثنا پرتاب نمی‌کند (کار نصفه رها نمی‌شود)',
+      'catch (e: Exception)' in _rvv16 and 'finally' in _rvv16, '')
+check('بخش۱۶ پاسخِ غیر 2xx رشتهٔ خالی می‌دهد نه متنِ خطای سرور',
+      'responseCode !in 200..299' in _rvv16, '')
+
+# ── ۱۶٫۱۲) هیچ API دسترس‌پذیریِ تازه‌ای اضافه نشد ────────────────────
+# لایهٔ بینایی عمداً «خواندن» است؛ اگر dispatchGesture از دلِ متنِ
+# خوانده‌شده ساخته می‌شد، همان چیزی می‌شد که سیاست پلی ممنوع کرده.
+check('بخش۱۶ مسیر بینایی API دسترس‌پذیری تازه‌ای ندارد',
+      not any(k in _rvv16 for k in ('AccessibilityNodeInfo', 'dispatchGesture', 'performGlobalAction')), '')
+
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)
 print('Stage-3 Android control test passed')
