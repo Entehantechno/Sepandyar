@@ -183,6 +183,10 @@ object ScreenTaskRunner {
 
     private fun attempt(step: ScreenStep, svc: ScreenControlService, deadline: Long, tries: Int) {
         if (cancelled) return
+        // اثرانگشت «پیش از» کنش. فقط برای گام‌هایی لازم است که انتظار
+        // داریم صفحه را عوض کنند؛ بقیه null می‌گیرند و این مسیر برایشان
+        // خاموش است.
+        val preFp = if (needsVisibleEffect(step)) svc.screenFingerprint() else null
         val acted = svc.performStep(step)
         /*
          * معیار موفقیت گام:
@@ -200,7 +204,24 @@ object ScreenTaskRunner {
         val satisfied = if (step.expect.isNotBlank()) {
             svc.isTextVisible(step.expect)
         } else {
-            acted || step.type == "wait" || step.type == "launch"
+            /*
+             * ── «ضربه پذیرفته شد» با «کار انجام شد» فرق دارد ──────────
+             * performStep برای tap_true بودنِ dispatchGesture را برمی‌گرداند،
+             * یعنی «سیستم ضربه را پذیرفت» — نه «آن دکمهٔ درست زده شد».
+             *
+             * این پیش‌تر کافی شمرده می‌شد. ولی ۳۴ گام از ۳۵ گامِ رسپی‌های
+             * موجود expect ندارند، پس هیچ معیارِ دیگری وجود نداشت: اگر
+             * برچسبِ حدسیِ ما با برچسبِ واقعیِ اپ یکی نبود، ضربه به گرهٔ
+             * اشتباه یا به هیچ می‌خورد، performStep همچنان true می‌داد و ما
+             * به سالمند می‌گفتیم «کار انجام شد». بدترین خروجیِ ممکن برای
+             * محصولی که کاربرش سالمند است.
+             *
+             * حالا: اگر صفحه اصلاً عوض نشد، ضربه اثری نداشته — پس گام
+             * «راضی‌کننده» نیست و به حلقهٔ تلاش برمی‌گردد، و در نهایت
+             * صادقانه شکست می‌خورد.
+             */
+            if (preFp != null && acted && svc.screenFingerprint() == preFp) false
+            else acted || step.type == "wait" || step.type == "launch"
         }
         if (satisfied) {
             index += 1
@@ -294,6 +315,16 @@ object ScreenTaskRunner {
             }
         }
     }
+
+    /**
+     * گام‌هایی که اگر صفحه را عوض نکنند، یعنی اثری نداشته‌اند.
+     *
+     * عمداً فقط دو نوع. بقیه یا ذاتاً صفحه را عوض نمی‌کنند (copy،
+     * select_text، set_progress) یا معیارِ خودشان را دارند (expect، wait،
+     * launch). اگر این فهرست پهن‌تر بود، یک کپیِ ساده «شکست» می‌گرفت.
+     */
+    private fun needsVisibleEffect(step: ScreenStep): Boolean =
+        step.expect.isBlank() && (step.type == "tap_text" || step.type == "tap_id")
 
     /**
      * اگر برچسب یک کنش تعهدآور است، همان کلیدواژه را برمی‌گرداند وگرنه null.

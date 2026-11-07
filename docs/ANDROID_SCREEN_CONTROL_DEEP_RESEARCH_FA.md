@@ -26,25 +26,48 @@
 > autonomous functionality, provided this functionality is for the app's core
 > purpose of assisting people with disabilities.»*
 
-### آیا ما می‌توانیم `isAccessibilityTool="true"` بگذاریم؟ **خیر.**
+### آیا می‌توانیم `isAccessibilityTool="true"` بگذاریم؟ **منطقهٔ خاکستری — و الان گذاشته شده**
 
-وسوسه‌انگیز است — چون سپندیار برای سالمندان است. ولی همان منابع صریح‌اند:
+⚠️ **این بخش در نسخهٔ نخستِ همین سند به‌اشتباه «خیرِ» قاطع نوشته شده بود.
+اصلاحش می‌کنم، چون مخزن از قبل این پرچم را دارد و ادعای قاطعِ من با کدِ
+موجود در تضاد بود.**
 
+شواهد **دو طرفه** است:
+
+علیه ما:
 > *«Antivirus software, automation tools, **assistants**, monitoring apps,
 > cleaners, password managers, and launchers do not fall under this category.»*
-
-و:
-
+>
 > *«A general voice assistant that happens to help some users with motor
 > impairments would not qualify.»*
 
-سپندیار یک دستیار صوتی است. گذاشتن این پرچم **سوءاستفاده از پرچم** است و خودِ
-سیاست می‌گوید *«Don't misuse the isAccessibilityTool flag.»*
+به نفع ما:
+> *«only screen readers, switch-based input systems, **voice-based input
+> tools**, and Braille-based access programs are designated as accessibility
+> tools»*
 
-**پیامد طراحی:** ما در دستهٔ «automation» می‌مانیم، یعنی فقط
-**deterministic, rule-based automation** مجاز است — «اگر X دیدی، Y را بزن» با
-اسکریپتِ از پیش نوشتهٔ انسان. این دقیقاً همان چیزی است که رسپی‌های ما هستند.
-پس معماری موجود درست است و عاملِ LLMِ خودمختار **نباید** ساخته شود.
+سپندیار **هم** دستیار صوتی است **هم** ابزار ورودی صوتی برای کسی که کار با
+صفحه‌لمسی برایش دشوار است. گوگل «assistants» را رد کرده و «voice-based input
+tools» را پذیرفته — و ما دقیقاً روی مرز این دو ایستاده‌ایم.
+
+**واقعیت این است که این سؤال از روی مستندات حل نمی‌شود؛ فقط بررسیِ خودِ
+گوگل حلش می‌کند.** و ریسک نامتقارن است:
+
+| سناریو | هزینه |
+|---|---|
+| پرچم باشد و گوگل بپذیرد | کنترل صفحه روی دستگاه‌های Advanced Protection هم کار می‌کند |
+| پرچم باشد و گوگل رد کند | رد شدن در Play **و** مسدود شدن توسط Play Protect |
+| پرچم نباشد | روی دستگاه‌های Advanced Protection، دسترسی بی‌صدا لغو می‌شود |
+
+`accessibility_service_config.xml` در حال حاضر `isAccessibilityTool="true"`
+دارد، با این توجیه که سپندیار ابزار ورودی صوتی برای سالمندان است. **این
+موضع دفاع‌پذیر است ولی تضمینی نیست** و نیازمند اعلام در Play Console +
+ویدئوی معرفی است.
+
+**تصمیمِ لازم (با شما، نه با من):** یا این ادعا را با ویدئو و شرحِ دقیقِ
+«ورودی صوتی برای محدودیت حرکتی/شناختی» در Play Console پشتیبانی کنیم، یا
+پرچم را برداریم و بپذیریم که روی دستگاه‌های Advanced Protection کنترل صفحه
+کار نمی‌کند. من نمی‌توانم از داخل کد تشخیص بدهم گوگل کدام را می‌پذیرد.
 
 ### Android 17 / Advanced Protection
 
@@ -204,7 +227,7 @@ hits the wrong coordinates» معروف است.
 
 | مورد | چرا نه |
 |---|---|
-| `isAccessibilityTool="true"` | سیاست صریحاً «assistants» را رد کرده؛ سوءاستفاده از پرچم است |
+| `isAccessibilityTool` | **ساخته/برداشته نشد — تصمیم باز.** پرچم از قبل در `accessibility_service_config.xml` هست. بخش ۱ را ببینید: منطقهٔ خاکستری است و فقط بررسیِ گوگل حلش می‌کند |
 | عامل LLM خودمختار روی درخت | فقط «deterministic, rule-based automation» مجاز است |
 | OCR روی‌دستگاهی | ML Kit خط فارسی/عربی ندارد |
 | MediaProjection | دیالوگ مجوز جدا می‌خواهد؛ `takeScreenshot` بی‌صدا و بدون دیالوگ است |

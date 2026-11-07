@@ -1380,6 +1380,53 @@ check('بخش۱۷ effect انگشت صفحه تهی استخراج نشد (سن�
 check('بخش۱۷ هیچ API دسترس‌پذیری تازه‌ای در مسیر بینایی نیست',
       not any(k in _lv17 for k in ('AccessibilityNodeInfo', 'performGlobalAction')), '')
 
+
+# ════════════════════════════════════════════════════════════════════════
+# بخش ۱۸ — «ضربه پذیرفته شد» ≠ «کار انجام شد»
+#
+# ریشه: ۳۴ گام از ۳۵ گامِ رسپی‌های موجود expect ندارند. بدون expect تنها
+# معیارِ موفقیت، مقدار برگشتی performStep بود — و آن برای tap یعنی
+# «dispatchGesture پذیرفته شد»، نه «دکمهٔ درست زده شد». اگر برچسبِ حدسیِ ما
+# با برچسبِ واقعی اپ نمی‌خواند، ضربه به هیچ می‌خورد و ما به سالمند
+# می‌گفتیم «کار انجام شد».
+# ════════════════════════════════════════════════════════════════════════
+_rn18 = open(os.path.join(KT, 'ScreenTaskRunner.kt'), encoding='utf-8').read()
+_rn18c = strip_kotlin(_rn18)
+_att18 = _body16('attempt', _rn18c)
+
+# ── ۱۸٫۱) داده: چقدر از رسپی‌ها بی‌expect اند؟ ───────────────────────
+_j18 = req('/api/apps/approved')[1]
+_steps18 = [st for it in _j18.get('items', []) for st in ((it.get('plan') or {}).get('steps') or [])]
+_noexp18 = [st for st in _steps18 if not (st.get('expect') or '').strip()]
+check('بخش۱۸ سنجش تهی نیست: دست‌کم ۲۰ گام در رسپی‌ها هست', len(_steps18) >= 20, len(_steps18))
+check('بخش۱۸ بیشتر گام‌ها expect ندارند (پس معیارِ جایگزین لازم است)',
+      len(_noexp18) > len(_steps18) // 2, (len(_noexp18), len(_steps18)))
+
+# ── ۱۸٫۲) معیارِ جایگزین: صفحه باید عوض شده باشد ────────────────────
+check('بخش۱۸ اثرانگشت «پیش از» performStep گرفته می‌شود',
+      0 <= _att18.find('preFp') < _att18.find('performStep'), (_att18.find('preFp'), _att18.find('performStep')))
+check('بخش۱۸ صفحهٔ دست‌نخورده ⇒ گام راضی‌کننده «نیست»',
+      'svc.screenFingerprint() == preFp) false' in _att18.replace('\n', ' ').replace('  ', ' ')
+      or ('screenFingerprint() == preFp' in _att18 and ') false' in _att18), '')
+check('بخش۱۸ نتیجه به حلقهٔ تلاش برمی‌گردد، نه شکستِ فوری (صفحهٔ کُند تنبیه نمی‌شود)',
+      'finish("failed"' not in _att18.split('screenFingerprint() == preFp')[1][:120]
+      if 'screenFingerprint() == preFp' in _att18 else False, '')
+
+# ── ۱۸٫۳) دامنهٔ نگهبان: عمداً باریک ────────────────────────────────
+_nve18 = _body16('needsVisibleEffect', _rn18)
+check('بخش۱۸ بدنهٔ needsVisibleEffect تهی استخراج نشد (سنجش تهی نیست)',
+      len(_nve18) > 40 and 'tap_text' in _nve18, len(_nve18))
+check('بخش۱۸ نگهبان فقط وقتی expect خالی است فعال می‌شود (معیارِ expect دست‌نخورده)',
+      'step.expect.isBlank()' in _nve18, '')
+_nve_types18 = set(re.findall(r'step\.type == "([a-z_]+)"', _nve18))
+check('بخش۱۸ نگهبان فقط برای tap_text و tap_id است',
+      _nve_types18 == {'tap_text', 'tap_id'}, sorted(_nve_types18))
+check('بخش۱۸ گام‌های ذاتاً بی‌اثرِ بصری بیرون مانده‌اند (وگرنه کپی «شکست» می‌گرفت)',
+      not _nve_types18 & {'copy', 'cut', 'select_text', 'select_all', 'set_progress', 'scroll'},
+      sorted(_nve_types18))
+check('بخش۱۸ conforM/wait/launch در دامنهٔ نگهبان نیستند',
+      not _nve_types18 & {'confirm', 'wait', 'launch'}, sorted(_nve_types18))
+
 print(f'STAGE-3 TEST: {total} checks; failures={len(failures)}')
 if failures: print('FAILED:',', '.join(failures)); sys.exit(1)
 print('Stage-3 Android control test passed')
